@@ -18,13 +18,17 @@ export const CSS = {
 } as const
 
 const RULES = `
-/* 占满整行：折叠时一行截断，展开时在同一个容器里换行 */
+/*
+ * 容器占满可用宽度（换行要在这个宽度内进行），但胶囊本身**按内容收缩**：
+ * flex-basis 取 auto + flex-grow 0，内容短就只有内容那么宽，不会拉满留白。
+ * min-width: 0 让它在内容超长时能收缩到容器宽度以内并被截断。
+ */
 .rvr-root {
   display: flex; align-items: flex-start; gap: 6px;
   width: 100%; min-width: 0;
 }
 .rvr-pill {
-  flex: 1 1 auto; min-width: 0;
+  flex: 0 1 auto; min-width: 0;
   display: block;
   padding: 2px 8px; border-radius: 8px;
   border: 1px solid var(--dsw-alias-border-l2, #e5e5e5);
