@@ -7,9 +7,12 @@
  * 展示规则（按调用顺序，相邻同模型合并）：
  * - 全程同一个模型   → `auto → glm-5.3-flash ×3`
  * - 中途换过模型     → `tierflow_pro → DeepSeek-V4.1-Flash → Qwen3.8-Flash ×2`
- * - 换回原模型       → `A → B ×1 → A ×1`（不合并，变回原模型本身是关键信息）
+ * - 换回原模型       → `A → B → A`（不合并，变回原模型本身是关键信息）
  *
- * 符号用 `→` 而不是 `,`：它表达的就是「从哪个模型变到哪个模型」。
+ * ## 折叠与展开
+ *
+ * 容器**占满整行宽度**。折叠态强制一行，超出部分被省略号截断；
+ * 点「展开」后在**同一个容器里换行**继续显示（不是弹层），「收起」回到一行。
  *
  * ## 为什么直接读 `turn.data`
  *
@@ -24,7 +27,7 @@
  */
 
 import type * as React from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CSS, ensureStyles } from './styles.ts'
 import { ROUTE_KIND, type RoutePhase, type TurnRoute } from './route.ts'
 
@@ -42,15 +45,6 @@ export interface RouteBadgeProps {
   /** 所属的 Turn（引擎传入的 TurnLocation）。 */
   turn?: unknown
 }
-
-/**
- * 最多直接画几段。
- *
- * 阶段一多，整条链在窄屏上会被裁掉一半、或者把每个模型名压成省略号
- * （`DeepSeek-V…`），反而读不出内容。超过就只画前几段 + `+N`，
- * 完整链条放悬停提示里。
- */
-const MAX_VISIBLE_PHASES = 3
 
 function readPhases(turn: TurnLike | undefined): readonly RoutePhase[] {
   const value = turn?.data?.get(ROUTE_KIND)
@@ -75,12 +69,36 @@ function tooltip(phases: readonly RoutePhase[]): string {
 
 export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null {
   const [expanded, setExpanded] = useState(false)
+  const [overflowing, setOverflowing] = useState(false)
+  const contentRef = useRef<HTMLSpanElement | null>(null)
+  const phases = readPhases(turn as TurnLike | undefined)
 
   useEffect(() => {
     ensureStyles()
   }, [])
 
-  const phases = readPhases(turn as TurnLike | undefined)
+  /**
+   * 判断折叠态是否真的被截断了。
+   *
+   * 只在内容装得下时不显示按钮 —— 否则每一轮都挂个没用的「展开」很吵。
+   * 折叠态（nowrap）下 `scrollWidth > clientWidth` 就是溢出。
+   */
+  useEffect(() => {
+    const element = contentRef.current
+    if (element === null || expanded) return
+    const measure = (): void => {
+      setOverflowing(element.scrollWidth > element.clientWidth + 1)
+    }
+    measure()
+    // 窗口变宽/变窄都会改变能否装下
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+    }
+  }, [expanded, phases.length])
+
   if (phases.length === 0) return null
 
   // 请求模型全程一致时只写一次，避免每段重复；不一致就各段自带。
@@ -88,76 +106,48 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
   const shared = requested.size === 1 ? phases[0]!.requested : undefined
   // 全程同一个模型时不必画箭头链条，`×N` 已经说清次数。
   const single = phases.length === 1
-  const truncated = phases.length > MAX_VISIBLE_PHASES
-  const shown = expanded || !truncated ? phases : phases.slice(0, MAX_VISIBLE_PHASES)
-  const hidden = phases.length - shown.length
 
-  const renderPhase = (phase: RoutePhase, index: number): React.JSX.Element => (
-    <span key={`${index}:${phase.provider}/${phase.served}`} className={CSS.served}>
-      {index > 0 ? <span className={CSS.arrow} aria-hidden="true"> → </span> : null}
-      {shared === undefined ? `${phase.requested} → ` : ''}
-      {phase.served}
-      {/* 只有连续用过多次才标次数：×1 没有额外信息 */}
-      {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
-    </span>
-  )
-
-  // 折叠态：一行 pill + 展开按钮。
-  if (!expanded) {
-    return (
-      <div className={CSS.root}>
-        <span className={CSS.pill} title={tooltip(phases)}>
-          {shared === undefined ? null : (
-            <>
-              {shared}
-              <span className={CSS.arrow} aria-hidden="true">→</span>
-            </>
-          )}
-          {shown.map(renderPhase)}
-          {hidden === 0 ? null : <span className={CSS.more}> +{hidden}</span>}
-        </span>
-        {truncated ? (
-          <button
-            type="button"
-            className={CSS.toggle}
-            title="展开完整变化过程"
-            aria-expanded={false}
-            onClick={() => setExpanded(true)}
-          >
-            展开
-          </button>
-        ) : null}
-      </div>
-    )
-  }
-
-  // 展开态：逐段一行列出，便于看清每一步。
   return (
-    <div className={CSS.panel}>
-      <div className={CSS.panelHead}>
-        <span className={CSS.panelTitle}>
-          {shared === undefined ? '模型变化过程' : `${shared} 的变化过程`}
-        </span>
+    <div className={CSS.root}>
+      <span
+        ref={contentRef}
+        // 折叠态一行截断，展开态在同一个容器里换行
+        className={expanded ? `${CSS.pill} ${CSS.pillExpanded}` : CSS.pill}
+        title={tooltip(phases)}
+        // 点击整块也能切换，省得只认那个小按钮
+        onClick={() => {
+          if (overflowing || expanded) setExpanded((value) => !value)
+        }}
+        role={overflowing || expanded ? 'button' : undefined}
+        aria-expanded={overflowing || expanded ? expanded : undefined}
+      >
+        {shared === undefined ? null : (
+          <>
+            {shared}
+            <span className={CSS.arrow} aria-hidden="true">→</span>
+          </>
+        )}
+        {phases.map((phase, index) => (
+          <span key={`${index}:${phase.provider}/${phase.served}`} className={CSS.served}>
+            {index > 0 ? <span className={CSS.arrow} aria-hidden="true"> → </span> : null}
+            {shared === undefined ? `${phase.requested} → ` : ''}
+            {phase.served}
+            {/* 只有连续用过多次才标次数：×1 没有额外信息 */}
+            {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
+          </span>
+        ))}
+      </span>
+      {overflowing || expanded ? (
         <button
           type="button"
           className={CSS.toggle}
-          title="收起"
-          aria-expanded={true}
-          onClick={() => setExpanded(false)}
+          title={expanded ? '收起成一行' : '展开显示全部'}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
         >
-          收起
+          {expanded ? '收起' : '展开'}
         </button>
-      </div>
-      <ol className={CSS.list}>
-        {phases.map((phase, index) => (
-          <li key={`${index}:${phase.provider}/${phase.served}`} className={CSS.listItem}>
-            <span className={CSS.listIndex}>{index + 1}</span>
-            <span className={CSS.served}>{phase.served}</span>
-            {shared === undefined ? <span className={CSS.listMeta}>{phase.requested}</span> : null}
-            <span className={CSS.count}>×{phase.count}</span>
-          </li>
-        ))}
-      </ol>
+      ) : null}
     </div>
   )
 }
