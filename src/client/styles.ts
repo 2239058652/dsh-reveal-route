@@ -14,29 +14,35 @@ export const CSS = {
   served: 'rvr-served',
   sep: 'rvr-sep',
   count: 'rvr-count',
+  more: 'rvr-more',
 } as const
 
 const RULES = `
-.rvr-root { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.rvr-root { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .rvr-pill {
-  display: inline-flex; align-items: baseline; gap: 5px;
+  display: inline-flex; align-items: baseline; gap: 2px;
   padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--dsw-alias-border-l2, #e5e5e5);
   background: var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.08));
   font-size: 11px; line-height: 1.5; white-space: nowrap;
-  max-width: 420px; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%; overflow: hidden;
   color: var(--dsw-alias-label-secondary, #5c5c5c);
 }
-.rvr-arrow { color: var(--dsw-alias-label-tertiary, #8c8c8c); }
+.rvr-arrow { color: var(--dsw-alias-label-tertiary, #8c8c8c); flex: none; }
 .rvr-served {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 600;
   color: var(--dsw-alias-state-success-primary, #22c55e);
-  overflow: hidden; text-overflow: ellipsis;
+  /* 不允许被压缩：宁可整体溢出被裁，也不要每个名字各剩几个字母 */
+  flex: none;
 }
 .rvr-sep { color: var(--dsw-alias-label-tertiary, #8c8c8c); font-weight: 400; }
 .rvr-count {
   font-family: inherit; font-weight: 400;
+  color: var(--dsw-alias-label-tertiary, #8c8c8c);
+}
+.rvr-more {
+  flex: none; font-weight: 400;
   color: var(--dsw-alias-label-tertiary, #8c8c8c);
 }
 `

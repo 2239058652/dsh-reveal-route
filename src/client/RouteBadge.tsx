@@ -43,6 +43,15 @@ export interface RouteBadgeProps {
   turn?: unknown
 }
 
+/**
+ * 最多直接画几段。
+ *
+ * 阶段一多，整条链在窄屏上会被裁掉一半、或者把每个模型名压成省略号
+ * （`DeepSeek-V…`），反而读不出内容。超过就只画前几段 + `+N`，
+ * 完整链条放悬停提示里。
+ */
+const MAX_VISIBLE_PHASES = 3
+
 function readPhases(turn: TurnLike | undefined): readonly RoutePhase[] {
   const value = turn?.data?.get(ROUTE_KIND)
   if (typeof value !== 'object' || value === null) return []
@@ -77,6 +86,8 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
   const shared = requested.size === 1 ? phases[0]!.requested : undefined
   // 全程同一个模型时不必画箭头链条，`×N` 已经说清次数。
   const single = phases.length === 1
+  const hidden = Math.max(0, phases.length - MAX_VISIBLE_PHASES)
+  const shown = hidden === 0 ? phases : phases.slice(0, MAX_VISIBLE_PHASES)
 
   return (
     <div className={CSS.root}>
@@ -87,7 +98,7 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
             <span className={CSS.arrow} aria-hidden="true">→</span>
           </>
         )}
-        {phases.map((phase, index) => (
+        {shown.map((phase, index) => (
           <span key={`${index}:${phase.provider}/${phase.served}`} className={CSS.served}>
             {index > 0 ? <span className={CSS.arrow} aria-hidden="true"> → </span> : null}
             {shared === undefined ? `${phase.requested} → ` : ''}
@@ -96,6 +107,8 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
             {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
           </span>
         ))}
+        {/* 截断后剩下的段数；完整链条在悬停提示里 */}
+        {hidden === 0 ? null : <span className={CSS.more}> +{hidden}</span>}
       </span>
     </div>
   )
