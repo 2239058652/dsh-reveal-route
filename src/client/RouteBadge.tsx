@@ -69,7 +69,6 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
   const entries = readEntries(turn as TurnLike | undefined)
   if (entries.length === 0) return null
 
-  const total = entries.reduce((sum, entry) => sum + entry.count, 0)
   // 请求模型全一致时提到前面显示一次，避免每项重复；不一致就各自标注。
   const requested = new Set(entries.map((entry) => entry.requested))
   const shared = requested.size === 1 ? entries[0]!.requested : undefined
@@ -88,7 +87,8 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
             {index > 0 ? <span className={CSS.sep}>, </span> : null}
             {shared === undefined ? `${entry.requested} → ` : ''}
             {entry.served}
-            {total > 1 ? <span className={CSS.count}> ×{entry.count}</span> : null}
+            {/* 只在单项被换过多次时标注次数：×1 没有额外信息 */}
+            {entry.count > 1 ? <span className={CSS.count}> ×{entry.count}</span> : null}
           </span>
         ))}
       </span>
