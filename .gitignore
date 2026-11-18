@@ -1,0 +1,15 @@
+# 依赖
+node_modules/
+
+# 本地环境
+.env
+*.local
+
+# 构建中间产物
+*.tsbuildinfo
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

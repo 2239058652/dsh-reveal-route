@@ -1,0 +1,8 @@
+# dsh-reveal-route bundle patch.
+#
+# 纯客户端插件：Host 半只有一个空壳 entry（客户端插件也要求 bundle patch 挂载）。
+# 真正的工作在浏览器半身 lib/client/index.js。
+- insert:
+    - id: reveal-route
+      name: 'dsh-reveal-route'
+      config: {}
