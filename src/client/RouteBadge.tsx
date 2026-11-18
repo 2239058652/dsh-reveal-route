@@ -24,7 +24,7 @@
  */
 
 import type * as React from 'react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { CSS, ensureStyles } from './styles.ts'
 import { ROUTE_KIND, type RoutePhase, type TurnRoute } from './route.ts'
 
@@ -74,6 +74,8 @@ function tooltip(phases: readonly RoutePhase[]): string {
 }
 
 export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null {
+  const [expanded, setExpanded] = useState(false)
+
   useEffect(() => {
     ensureStyles()
   }, [])
@@ -86,30 +88,76 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
   const shared = requested.size === 1 ? phases[0]!.requested : undefined
   // 全程同一个模型时不必画箭头链条，`×N` 已经说清次数。
   const single = phases.length === 1
-  const hidden = Math.max(0, phases.length - MAX_VISIBLE_PHASES)
-  const shown = hidden === 0 ? phases : phases.slice(0, MAX_VISIBLE_PHASES)
+  const truncated = phases.length > MAX_VISIBLE_PHASES
+  const shown = expanded || !truncated ? phases : phases.slice(0, MAX_VISIBLE_PHASES)
+  const hidden = phases.length - shown.length
 
+  const renderPhase = (phase: RoutePhase, index: number): React.JSX.Element => (
+    <span key={`${index}:${phase.provider}/${phase.served}`} className={CSS.served}>
+      {index > 0 ? <span className={CSS.arrow} aria-hidden="true"> → </span> : null}
+      {shared === undefined ? `${phase.requested} → ` : ''}
+      {phase.served}
+      {/* 只有连续用过多次才标次数：×1 没有额外信息 */}
+      {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
+    </span>
+  )
+
+  // 折叠态：一行 pill + 展开按钮。
+  if (!expanded) {
+    return (
+      <div className={CSS.root}>
+        <span className={CSS.pill} title={tooltip(phases)}>
+          {shared === undefined ? null : (
+            <>
+              {shared}
+              <span className={CSS.arrow} aria-hidden="true">→</span>
+            </>
+          )}
+          {shown.map(renderPhase)}
+          {hidden === 0 ? null : <span className={CSS.more}> +{hidden}</span>}
+        </span>
+        {truncated ? (
+          <button
+            type="button"
+            className={CSS.toggle}
+            title="展开完整变化过程"
+            aria-expanded={false}
+            onClick={() => setExpanded(true)}
+          >
+            展开
+          </button>
+        ) : null}
+      </div>
+    )
+  }
+
+  // 展开态：逐段一行列出，便于看清每一步。
   return (
-    <div className={CSS.root}>
-      <span className={CSS.pill} title={tooltip(phases)}>
-        {shared === undefined ? null : (
-          <>
-            {shared}
-            <span className={CSS.arrow} aria-hidden="true">→</span>
-          </>
-        )}
-        {shown.map((phase, index) => (
-          <span key={`${index}:${phase.provider}/${phase.served}`} className={CSS.served}>
-            {index > 0 ? <span className={CSS.arrow} aria-hidden="true"> → </span> : null}
-            {shared === undefined ? `${phase.requested} → ` : ''}
-            {phase.served}
-            {/* 只有连续用过多次才标次数：×1 没有额外信息 */}
-            {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
-          </span>
+    <div className={CSS.panel}>
+      <div className={CSS.panelHead}>
+        <span className={CSS.panelTitle}>
+          {shared === undefined ? '模型变化过程' : `${shared} 的变化过程`}
+        </span>
+        <button
+          type="button"
+          className={CSS.toggle}
+          title="收起"
+          aria-expanded={true}
+          onClick={() => setExpanded(false)}
+        >
+          收起
+        </button>
+      </div>
+      <ol className={CSS.list}>
+        {phases.map((phase, index) => (
+          <li key={`${index}:${phase.provider}/${phase.served}`} className={CSS.listItem}>
+            <span className={CSS.listIndex}>{index + 1}</span>
+            <span className={CSS.served}>{phase.served}</span>
+            {shared === undefined ? <span className={CSS.listMeta}>{phase.requested}</span> : null}
+            <span className={CSS.count}>×{phase.count}</span>
+          </li>
         ))}
-        {/* 截断后剩下的段数；完整链条在悬停提示里 */}
-        {hidden === 0 ? null : <span className={CSS.more}> +{hidden}</span>}
-      </span>
+      </ol>
     </div>
   )
 }
