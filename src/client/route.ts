@@ -46,19 +46,25 @@ export interface RouteObservation {
   readonly turn: number
 }
 
-/** 一轮内某个被路由到的模型的调用次数。 */
-export interface RouteEntry {
+/** 一段连续使用同一模型的区间。 */
+export interface RoutePhase {
   readonly requested: string
   readonly served: string
   readonly provider: string
-  /** 本轮被路由到该模型的请求次数 */
+  /** 这一段里连续调用该模型的次数 */
   readonly count: number
 }
 
-/** 一轮内所有被路由到的模型，按首次出现顺序排列。 */
+/**
+ * 一轮内模型使用的变化过程。
+ *
+ * `phases` 按调用顺序排列，**相邻相同模型会合并成一段**。模型切走又切回时
+ * 会重新开一段（`A ×1 → B ×1 → A ×1`），因为「变回去」本身是关键信息，
+ * 合并掉就看不出中间换过。
+ */
 export interface TurnRoute {
   readonly turn: number
-  readonly entries: readonly RouteEntry[]
+  readonly phases: readonly RoutePhase[]
 }
 
 /** 只读我们要的那几层，避免为一次展示引入整包类型依赖。 */
@@ -122,40 +128,45 @@ export function readRoute(event: unknown): RouteObservation | undefined {
 }
 
 /**
- * 把一次新的路由观察并进本轮的累计表。
+ * 把一次新的路由观察并进本轮的变化序列。
  *
- * 同一轮内可能发生多次路由改写（每次工具调用都是一次新请求，上游可能换模型），
- * 只保留最后一个会丢掉前面的信息，所以这里按 `provider/served` 聚合并计次。
- * 顺序保持首次出现顺序，便于界面稳定排列。
+ * 同一轮内可能发生多次路由改写（每次工具调用都是一次新请求，上游可能换模型）。
+ * 这里维护的是**按调用顺序的阶段序列**，相邻同一个模型合并计数：
+ *
+ * ```
+ * glm, glm, deepseek, glm  →  glm×2 → deepseek×1 → glm×1
+ * ```
+ *
+ * 注意末尾那段 `glm×1` 不会被并回第一段 —— 中间换过模型就说明路由真的变了，
+ * 合并会把「变回原模型」这个事实抹掉。
  *
  * @param previous - 本轮已有的累计值，尚无则为 undefined
  * @param observation - 新观察到的一次改写
- * @returns 新的累计值；计数变化时返回新对象，否则原样返回 previous
+ * @returns 新的累计值；总是返回新对象（调用方靠引用判断变化）
  */
 export function accumulateRoute(
   previous: TurnRoute | undefined,
   observation: RouteObservation,
 ): TurnRoute {
-  const entries = previous?.entries ?? []
-  const index = entries.findIndex(
-    (entry) => entry.served === observation.served && entry.provider === observation.provider,
-  )
-  if (index === -1) {
+  const phases = previous?.phases ?? []
+  const last = phases.at(-1)
+  // 和上一段是同一个模型：延长这一段，不新增阶段。
+  if (last !== undefined && last.served === observation.served && last.provider === observation.provider) {
     return {
       turn: observation.turn,
-      entries: [
-        ...entries,
-        {
-          requested: observation.requested,
-          served: observation.served,
-          provider: observation.provider,
-          count: 1,
-        },
-      ],
+      phases: [...phases.slice(0, -1), { ...last, count: last.count + 1 }],
     }
   }
-  const current = entries[index]!
-  const next = entries.slice()
-  next[index] = { ...current, count: current.count + 1 }
-  return { turn: observation.turn, entries: next }
+  return {
+    turn: observation.turn,
+    phases: [
+      ...phases,
+      {
+        requested: observation.requested,
+        served: observation.served,
+        provider: observation.provider,
+        count: 1,
+      },
+    ],
+  }
 }

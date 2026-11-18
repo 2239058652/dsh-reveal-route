@@ -1,12 +1,15 @@
 /**
- * 徽标组件：本轮被路由到的模型一览。
+ * 徽标组件：本轮模型使用的变化过程。
  *
  * 挂在 `conversation.chat.turnTail`（每轮动作行之前）。没有观察值就返回 null，
  * 所以显式模型的轮次、以及不写 replayState 的 provider 完全看不到它。
  *
- * 展示规则：
- * - 本轮只有一个被路由到的模型 → `请求模型 → 实际模型`
- * - 本轮换过多个模型 → 依次列出，每个后面标调用次数（`×N`，为 1 时省略）
+ * 展示规则（按调用顺序，相邻同模型合并）：
+ * - 全程同一个模型   → `auto → glm-5.3-flash ×3`
+ * - 中途换过模型     → `tierflow_pro → DeepSeek-V4.1-Flash → Qwen3.8-Flash ×2`
+ * - 换回原模型       → `A → B ×1 → A ×1`（不合并，变回原模型本身是关键信息）
+ *
+ * 符号用 `→` 而不是 `,`：它表达的就是「从哪个模型变到哪个模型」。
  *
  * ## 为什么直接读 `turn.data`
  *
@@ -23,7 +26,7 @@
 import type * as React from 'react'
 import { useEffect } from 'react'
 import { CSS, ensureStyles } from './styles.ts'
-import { ROUTE_KIND, type RouteEntry, type TurnRoute } from './route.ts'
+import { ROUTE_KIND, type RoutePhase, type TurnRoute } from './route.ts'
 
 /** 只用到 `data.get`。 */
 interface TurnDataStore {
@@ -40,24 +43,24 @@ export interface RouteBadgeProps {
   turn?: unknown
 }
 
-function readEntries(turn: TurnLike | undefined): readonly RouteEntry[] {
+function readPhases(turn: TurnLike | undefined): readonly RoutePhase[] {
   const value = turn?.data?.get(ROUTE_KIND)
   if (typeof value !== 'object' || value === null) return []
-  const entries = (value as Partial<TurnRoute>).entries
-  if (!Array.isArray(entries)) return []
-  return entries.filter(
-    (entry): entry is RouteEntry =>
-      typeof entry === 'object' &&
-      entry !== null &&
-      typeof (entry as RouteEntry).served === 'string' &&
-      (entry as RouteEntry).served !== '',
+  const phases = (value as Partial<TurnRoute>).phases
+  if (!Array.isArray(phases)) return []
+  return phases.filter(
+    (phase): phase is RoutePhase =>
+      typeof phase === 'object' &&
+      phase !== null &&
+      typeof (phase as RoutePhase).served === 'string' &&
+      (phase as RoutePhase).served !== '',
   )
 }
 
-/** 悬停提示：逐个模型列出请求方与实际服务方。 */
-function tooltip(entries: readonly RouteEntry[]): string {
-  return entries
-    .map((entry) => `${entry.provider}/${entry.requested} → ${entry.served} ×${entry.count}`)
+/** 悬停提示：逐段列出请求方、实际服务方与这一段连续调用了几次。 */
+function tooltip(phases: readonly RoutePhase[]): string {
+  return phases
+    .map((phase, index) => `${index + 1}. ${phase.provider}/${phase.requested} → ${phase.served} ×${phase.count}`)
     .join('\n')
 }
 
@@ -66,29 +69,31 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
     ensureStyles()
   }, [])
 
-  const entries = readEntries(turn as TurnLike | undefined)
-  if (entries.length === 0) return null
+  const phases = readPhases(turn as TurnLike | undefined)
+  if (phases.length === 0) return null
 
-  // 请求模型全一致时提到前面显示一次，避免每项重复；不一致就各自标注。
-  const requested = new Set(entries.map((entry) => entry.requested))
-  const shared = requested.size === 1 ? entries[0]!.requested : undefined
+  // 请求模型全程一致时只写一次，避免每段重复；不一致就各段自带。
+  const requested = new Set(phases.map((phase) => phase.requested))
+  const shared = requested.size === 1 ? phases[0]!.requested : undefined
+  // 全程同一个模型时不必画箭头链条，`×N` 已经说清次数。
+  const single = phases.length === 1
 
   return (
     <div className={CSS.root}>
-      <span className={CSS.pill} title={tooltip(entries)}>
+      <span className={CSS.pill} title={tooltip(phases)}>
         {shared === undefined ? null : (
           <>
             {shared}
             <span className={CSS.arrow} aria-hidden="true">→</span>
           </>
         )}
-        {entries.map((entry, index) => (
-          <span key={`${entry.provider}/${entry.served}`} className={CSS.served}>
-            {index > 0 ? <span className={CSS.sep}>, </span> : null}
-            {shared === undefined ? `${entry.requested} → ` : ''}
-            {entry.served}
-            {/* 只在单项被换过多次时标注次数：×1 没有额外信息 */}
-            {entry.count > 1 ? <span className={CSS.count}> ×{entry.count}</span> : null}
+        {phases.map((phase, index) => (
+          <span key={`${index}:${phase.provider}/${phase.served}`} className={CSS.served}>
+            {index > 0 ? <span className={CSS.arrow} aria-hidden="true"> → </span> : null}
+            {shared === undefined ? `${phase.requested} → ` : ''}
+            {phase.served}
+            {/* 只有连续用过多次才标次数：×1 没有额外信息 */}
+            {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
           </span>
         ))}
       </span>
