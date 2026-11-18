@@ -46,6 +46,21 @@ export interface RouteObservation {
   readonly turn: number
 }
 
+/** 一轮内某个被路由到的模型的调用次数。 */
+export interface RouteEntry {
+  readonly requested: string
+  readonly served: string
+  readonly provider: string
+  /** 本轮被路由到该模型的请求次数 */
+  readonly count: number
+}
+
+/** 一轮内所有被路由到的模型，按首次出现顺序排列。 */
+export interface TurnRoute {
+  readonly turn: number
+  readonly entries: readonly RouteEntry[]
+}
+
 /** 只读我们要的那几层，避免为一次展示引入整包类型依赖。 */
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -104,4 +119,43 @@ export function readRoute(event: unknown): RouteObservation | undefined {
   if (turn === undefined) return undefined
 
   return { requested, served, provider, turn }
+}
+
+/**
+ * 把一次新的路由观察并进本轮的累计表。
+ *
+ * 同一轮内可能发生多次路由改写（每次工具调用都是一次新请求，上游可能换模型），
+ * 只保留最后一个会丢掉前面的信息，所以这里按 `provider/served` 聚合并计次。
+ * 顺序保持首次出现顺序，便于界面稳定排列。
+ *
+ * @param previous - 本轮已有的累计值，尚无则为 undefined
+ * @param observation - 新观察到的一次改写
+ * @returns 新的累计值；计数变化时返回新对象，否则原样返回 previous
+ */
+export function accumulateRoute(
+  previous: TurnRoute | undefined,
+  observation: RouteObservation,
+): TurnRoute {
+  const entries = previous?.entries ?? []
+  const index = entries.findIndex(
+    (entry) => entry.served === observation.served && entry.provider === observation.provider,
+  )
+  if (index === -1) {
+    return {
+      turn: observation.turn,
+      entries: [
+        ...entries,
+        {
+          requested: observation.requested,
+          served: observation.served,
+          provider: observation.provider,
+          count: 1,
+        },
+      ],
+    }
+  }
+  const current = entries[index]!
+  const next = entries.slice()
+  next[index] = { ...current, count: current.count + 1 }
+  return { turn: observation.turn, entries: next }
 }

@@ -1,5 +1,5 @@
 /**
- * 注册 Definition：把每个 Turn 里观察到的上游路由发布成本轮的业务数据。
+ * 注册 Definition：把每个 Turn 里观察到的上游路由累计成本轮的业务数据。
  *
  * 走的是 ui-conversation 的公开扩展点 `ctx.uiConversation.events.register(...)`，
  * 和 ui-chat 自己注册 15 个 Definition 用的是同一个入口 —— 不 patch、不猴补、
@@ -11,7 +11,12 @@
  * @module dsh-reveal-route/register
  */
 
-import { readRoute, ROUTE_KIND, type RouteObservation } from './route.ts'
+import {
+  accumulateRoute,
+  readRoute,
+  ROUTE_KIND,
+  type TurnRoute,
+} from './route.ts'
 
 /** Definition 只用到这几个字段；写成结构化契约，宿主换实现时这里不必跟着改。 */
 interface MatchResult {
@@ -22,10 +27,10 @@ interface MatchResult {
 interface NodeDefinition {
   kind: string
   match: Readonly<Record<string, (event: unknown) => MatchResult | null>>
-  start(context: unknown, match: { event: unknown }): RouteObservation | undefined
-  update(context: { state?: RouteObservation }, match: { event: unknown }): RouteObservation | undefined
+  start(context: unknown, match: { event: unknown }): TurnRoute
+  update(context: { state: TurnRoute }, match: { event: unknown }): TurnRoute
   buildLocationData(
-    context: { state?: RouteObservation },
+    context: { state?: TurnRoute },
     scope: 'turn' | 'step',
     previous: TurnScopedData | null,
   ): TurnScopedData | null
@@ -45,11 +50,21 @@ interface EventsRegistry {
 /** 只为导出给调用方做类型标注。 */
 export type { EventsRegistry }
 
+/** 一个 Context 至少要有一次观察才会被创建；start 时必然有。 */
+function firstRoute(event: unknown): TurnRoute {
+  const observation = readRoute(event)
+  if (observation === undefined) {
+    throw new Error('dsh-reveal-route: start requires a routable assistant/message')
+  }
+  return accumulateRoute(undefined, observation)
+}
+
 /**
  * 定义本体。
  *
- * 一个 Turn 一个 Context（id = 轮次号）；同一轮多个 assistant/message 时，
- * 后到的覆盖前面的 —— 展示的是该轮最后一个被改写过路由的请求。
+ * 一个 Turn 一个 Context（id = 轮次号）。同一轮内多次路由改写会**累计**成
+ * 按 provider/served 归并的列表（带次数），而不是互相覆盖 —— 长任务里模型
+ * 被换成别的再换回来，也能看出每个模型各服务了几次。
  */
 const definition: NodeDefinition = {
   kind: ROUTE_KIND,
@@ -64,9 +79,12 @@ const definition: NodeDefinition = {
     },
   },
 
-  start: (_context, match) => readRoute(match.event),
+  start: (_context, match) => firstRoute(match.event),
 
-  update: (context, match) => readRoute(match.event) ?? context.state,
+  update: (context, match) => {
+    const observation = readRoute(match.event)
+    return observation === undefined ? context.state : accumulateRoute(context.state, observation)
+  },
 
   buildLocationData: (context, scope, previous) => {
     if (scope !== 'turn') return null

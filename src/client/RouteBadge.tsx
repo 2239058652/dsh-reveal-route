@@ -1,8 +1,12 @@
 /**
- * 徽标组件：`auto → glm-5.3-flash`。
+ * 徽标组件：本轮被路由到的模型一览。
  *
  * 挂在 `conversation.chat.turnTail`（每轮动作行之前）。没有观察值就返回 null，
  * 所以显式模型的轮次、以及不写 replayState 的 provider 完全看不到它。
+ *
+ * 展示规则：
+ * - 本轮只有一个被路由到的模型 → `请求模型 → 实际模型`
+ * - 本轮换过多个模型 → 依次列出，每个后面标调用次数（`×N`，为 1 时省略）
  *
  * ## 为什么直接读 `turn.data`
  *
@@ -11,8 +15,7 @@
  * 这里是同一条链路的下游 —— 不做任何跨插件读取。
  *
  * 类型上不依赖 `ConversationTurnDataMap` 的声明合并（那是本包之外的模块，
- * 合并是否生效取决于宿主包的导出形态），改用最小结构契约：
- * 越界访问不可能，字段缺失按「无数据」处理。
+ * 合并是否生效取决于宿主包的导出形态），改用最小结构契约。
  *
  * @module dsh-reveal-route/RouteBadge
  */
@@ -20,7 +23,7 @@
 import type * as React from 'react'
 import { useEffect } from 'react'
 import { CSS, ensureStyles } from './styles.ts'
-import { ROUTE_KIND, type RouteObservation } from './route.ts'
+import { ROUTE_KIND, type RouteEntry, type TurnRoute } from './route.ts'
 
 /** 只用到 `data.get`。 */
 interface TurnDataStore {
@@ -37,12 +40,25 @@ export interface RouteBadgeProps {
   turn?: unknown
 }
 
-function readObservation(turn: TurnLike | undefined): RouteObservation | undefined {
+function readEntries(turn: TurnLike | undefined): readonly RouteEntry[] {
   const value = turn?.data?.get(ROUTE_KIND)
-  if (typeof value !== 'object' || value === null) return undefined
-  const candidate = value as Partial<RouteObservation>
-  if (typeof candidate.served !== 'string' || candidate.served === '') return undefined
-  return candidate as RouteObservation
+  if (typeof value !== 'object' || value === null) return []
+  const entries = (value as Partial<TurnRoute>).entries
+  if (!Array.isArray(entries)) return []
+  return entries.filter(
+    (entry): entry is RouteEntry =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof (entry as RouteEntry).served === 'string' &&
+      (entry as RouteEntry).served !== '',
+  )
+}
+
+/** 悬停提示：逐个模型列出请求方与实际服务方。 */
+function tooltip(entries: readonly RouteEntry[]): string {
+  return entries
+    .map((entry) => `${entry.provider}/${entry.requested} → ${entry.served} ×${entry.count}`)
+    .join('\n')
 }
 
 export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null {
@@ -50,18 +66,31 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
     ensureStyles()
   }, [])
 
-  const observation = readObservation(turn as TurnLike | undefined)
-  if (observation === undefined) return null
+  const entries = readEntries(turn as TurnLike | undefined)
+  if (entries.length === 0) return null
 
-  const { requested, served, provider } = observation
-  const title = `请求 ${provider}/${requested} · 上游实际服务 ${served}`
+  const total = entries.reduce((sum, entry) => sum + entry.count, 0)
+  // 请求模型全一致时提到前面显示一次，避免每项重复；不一致就各自标注。
+  const requested = new Set(entries.map((entry) => entry.requested))
+  const shared = requested.size === 1 ? entries[0]!.requested : undefined
 
   return (
     <div className={CSS.root}>
-      <span className={CSS.pill} title={title}>
-        {requested}
-        <span className={CSS.arrow} aria-hidden="true">→</span>
-        <span className={CSS.served}>{served}</span>
+      <span className={CSS.pill} title={tooltip(entries)}>
+        {shared === undefined ? null : (
+          <>
+            {shared}
+            <span className={CSS.arrow} aria-hidden="true">→</span>
+          </>
+        )}
+        {entries.map((entry, index) => (
+          <span key={`${entry.provider}/${entry.served}`} className={CSS.served}>
+            {index > 0 ? <span className={CSS.sep}>, </span> : null}
+            {shared === undefined ? `${entry.requested} → ` : ''}
+            {entry.served}
+            {total > 1 ? <span className={CSS.count}> ×{entry.count}</span> : null}
+          </span>
+        ))}
       </span>
     </div>
   )

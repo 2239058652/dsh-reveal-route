@@ -12,6 +12,8 @@ export const CSS = {
   pill: 'rvr-pill',
   arrow: 'rvr-arrow',
   served: 'rvr-served',
+  sep: 'rvr-sep',
+  count: 'rvr-count',
 } as const
 
 const RULES = `
@@ -31,6 +33,11 @@ const RULES = `
   font-weight: 600;
   color: var(--dsw-alias-state-success-primary, #22c55e);
   overflow: hidden; text-overflow: ellipsis;
+}
+.rvr-sep { color: var(--dsw-alias-label-tertiary, #8c8c8c); font-weight: 400; }
+.rvr-count {
+  font-family: inherit; font-weight: 400;
+  color: var(--dsw-alias-label-tertiary, #8c8c8c);
 }
 `
 
