@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Reveal route",
+    "description": "Shows the model the upstream actually served under each turn, appearing only when the upstream rewrote the route."
+  }
+}

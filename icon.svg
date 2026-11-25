@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Reveal route">
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#0891b2"/>
+  <g>
+    <path d="M12 32s8-13 20-13 20 13 20 13-8 13-20 13-20-13-20-13z" fill="none" stroke="#fff" stroke-width="3.6"/><circle cx="32" cy="32" r="6" fill="#fff"/><path d="M32 45v7M32 52l-7 5M32 52l7 5" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+  </g>
+</svg>
