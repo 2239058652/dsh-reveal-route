@@ -101,12 +101,30 @@ function formatSpeed(value: number | null): string | null {
 }
 
 /**
- * 四个指标拼成一行。
+ * 数字缩写：1234 → 1.2k，1234567 → 1.2M。
  *
- * 用语尽量不用行话：`首字` 代替 TTFT，`生成` / `全程` 区分两个速度口径。
- * 缺值的项直接跳过，不显示占位符。
+ * token 数动辄上万，全写出来会挤爆一行。
  */
-function metricParts(metrics: TurnMetrics | undefined): string[] {
+function formatCount(value: number | null): string | null {
+  if (value === null) return null
+  if (value < 1000) return String(Math.round(value))
+  if (value < 1_000_000) {
+    // 千位：<10000 保留一位小数（1.2k），之后取整（123k）
+    const k = value / 1000
+    const text = k < 10 ? k.toFixed(1) : String(Math.round(k))
+    // 四舍五入可能把 999.9k 抬成 1000k，进到 M 档
+    return text === '1000' ? `${(value / 1_000_000).toFixed(1)}M` : `${text}k`
+  }
+  return `${(value / 1_000_000).toFixed(1)}M`
+}
+
+/**
+ * 第一行：速度类指标。
+ *
+ * 用语尽量不用行话：`首字` 代替 TTFT；`生成` / `整体` 区分两个速度口径 ——
+ * 生成只看真正出字的时间，整体把等待首字和工具执行也算进去。
+ */
+function speedParts(metrics: TurnMetrics | undefined): string[] {
   if (metrics === undefined) return []
   const parts: string[] = []
   const ttft = formatMs(metrics.avgTtftMs)
@@ -114,19 +132,58 @@ function metricParts(metrics: TurnMetrics | undefined): string[] {
   const decode = formatSpeed(metrics.decodeSpeed)
   if (decode !== null) parts.push(`生成 ${decode} tok/s`)
   const e2e = formatSpeed(metrics.e2eSpeed)
-  if (e2e !== null) parts.push(`全程 ${e2e} tok/s`)
+  if (e2e !== null) parts.push(`整体 ${e2e} tok/s`)
   const elapsed = formatMs(metrics.elapsedMs)
   if (elapsed !== null) parts.push(`耗时 ${elapsed}`)
   return parts
 }
 
+/**
+ * 第二行：用量与异常。
+ *
+ * 只显示有值的项 —— 工具 0 次、重试 0 次于读者无意义，直接省略。
+ */
+function usageParts(metrics: TurnMetrics | undefined): string[] {
+  if (metrics === undefined) return []
+  const parts: string[] = []
+  const input = formatCount(metrics.inputTokens)
+  const cache = formatCount(metrics.cacheReadTokens)
+  if (input !== null || cache !== null) {
+    const fragments: string[] = []
+    if (input !== null) fragments.push(`入 ${input}`)
+    if (cache !== null) fragments.push(`缓存 ${cache}`)
+    parts.push(fragments.join(' / '))
+  }
+  const output = formatCount(metrics.outputTokens)
+  if (output !== null) parts.push(`出 ${output}`)
+  if (metrics.steps > 0) parts.push(`${metrics.steps} 步`)
+  if (metrics.toolCalls !== null) parts.push(`工具 ${metrics.toolCalls}`)
+  if (metrics.retries !== null) parts.push(`重试 ${metrics.retries}`)
+  // 正常完成的轮次不标状态；被中止/出错才值得提示
+  if (metrics.endReason !== null && metrics.endReason !== 'completed') {
+    parts.push(metrics.endReason === 'aborted' ? '已中止' : metrics.endReason === 'error' ? '出错' : metrics.endReason)
+  }
+  return parts
+}
+
+/** 把一组文字用 `·` 连接渲染成互不粘连的片段。 */
+function joinPart(className: string): (part: string, index: number) => React.JSX.Element {
+  return (part, index) => (
+    <span key={`${index}:${part}`} className={className}>
+      {index > 0 ? <span className={CSS.sep} aria-hidden="true">·</span> : null}
+      {part}
+    </span>
+  )
+}
+
 export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null {
   const [expanded, setExpanded] = useState(false)
   const [overflowing, setOverflowing] = useState(false)
-  const contentRef = useRef<HTMLSpanElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
   const reveal = readReveal(turn as TurnLike | undefined)
   const phases = readPhases(turn as TurnLike | undefined)
-  const metrics = metricParts(reveal?.metrics)
+  const speeds = speedParts(reveal?.metrics)
+  const usage = usageParts(reveal?.metrics)
 
   useEffect(() => {
     ensureStyles()
@@ -138,7 +195,7 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
    * 只在确实溢出时显示「展开」按钮 —— 否则每一轮都挂个没用的按钮很吵。
    * 折叠态（nowrap）下 `scrollWidth > clientWidth` 就是溢出。
    *
-   * 依赖里带上 metrics：一轮里样本是逐个到达的，内容会变长，
+   * 依赖里带上两行的内容：一轮里样本是逐个到达的，内容会变长，
    * 需要重新测量；只在挂载时测一次会导致长轮次漏掉按钮。
    */
   useEffect(() => {
@@ -155,9 +212,9 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
     return () => {
       observer.disconnect()
     }
-  }, [expanded, phases.length, metrics.length])
+  }, [expanded, phases.length, speeds.length, usage.length])
 
-  if (phases.length === 0 && metrics.length === 0) return null
+  if (phases.length === 0 && speeds.length === 0 && usage.length === 0) return null
 
   // 请求模型全程一致时只写一次，避免每段重复；不一致就各段自带。
   const requested = new Set(phases.map((phase) => phase.requested))
@@ -169,49 +226,44 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
 
   return (
     <div className={CSS.root}>
-      <span
+      <div
         ref={contentRef}
-        // 折叠态一行截断，展开态在同一个容器里换行
-        className={expanded ? `${CSS.pill} ${CSS.pillExpanded}` : CSS.pill}
-        // 没有路由阶段时不必挂一个空的悬浮提示
-        title={tip === '' ? undefined : tip}
-        // 点击整块也能切换，省得只认那个小按钮
-        onClick={() => {
-          if (overflowing || expanded) setExpanded((value) => !value)
-        }}
-        role={overflowing || expanded ? 'button' : undefined}
-        aria-expanded={overflowing || expanded ? expanded : undefined}
+        className={expanded ? `${CSS.body} ${CSS.bodyExpanded}` : CSS.body}
       >
-        {shared === undefined ? null : (
-          <>
-            {shared}
-            <span className={CSS.arrow} aria-hidden="true">→</span>
-          </>
+        {/* 第一行：模型路由 */}
+        {phases.length === 0 ? null : (
+          <div className={CSS.line} title={tip === '' ? undefined : tip}>
+            <span className={CSS.served}>
+              {shared === undefined ? null : (
+                <>
+                  {shared}
+                  <span className={CSS.arrow} aria-hidden="true"> → </span>
+                </>
+              )}
+            </span>
+            {phases.map((phase, index) => (
+              <span key={`${index}:${phase.provider}/${phase.served}`} className={CSS.served}>
+                {index > 0 ? <span className={CSS.arrow} aria-hidden="true"> → </span> : null}
+                {shared === undefined ? `${phase.requested} → ` : ''}
+                {phase.served}
+                {/* 只有连续用过多次才标次数：×1 没有额外信息 */}
+                {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
+              </span>
+            ))}
+          </div>
         )}
-        {phases.map((phase, index) => (
-          <span key={`${index}:${phase.provider}/${phase.served}`} className={CSS.served}>
-            {index > 0 ? <span className={CSS.arrow} aria-hidden="true"> → </span> : null}
-            {shared === undefined ? `${phase.requested} → ` : ''}
-            {phase.served}
-            {/* 只有连续用过多次才标次数：×1 没有额外信息 */}
-            {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
-          </span>
-        ))}
-        {/* 性能指标跟在模型链后面；只有前面确实有内容时才加分隔符 */}
-        {metrics.map((part, index) => (
-          <span key={part} className={CSS.metric}>
-            {index === 0 && phases.length === 0 ? null : (
-              <span className={CSS.sep} aria-hidden="true">·</span>
-            )}
-            {part}
-          </span>
-        ))}
-      </span>
+
+        {/* 第二行：性能指标 */}
+        {speeds.length === 0 ? null : <div className={CSS.line}>{speeds.map(joinPart(CSS.part))}</div>}
+
+        {/* 第三行：用量与异常 */}
+        {usage.length === 0 ? null : <div className={CSS.line}>{usage.map(joinPart(CSS.part))}</div>}
+      </div>
       {overflowing || expanded ? (
         <button
           type="button"
           className={CSS.toggle}
-          title={expanded ? '收起成一行' : '展开显示全部'}
+          title={expanded ? '收起' : '展开显示全部'}
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >

@@ -30,9 +30,11 @@ import {
   type TurnRoute,
 } from './route.ts'
 import {
+  accumulateCounters,
   accumulateMetrics,
   createAccumulator,
   finalizeMetrics,
+  readCounters,
   readStepSample,
   readStepStart,
   type MetricsAccumulator,
@@ -103,6 +105,12 @@ function contextTurn(event: unknown): number {
   return typeof turn === 'number' && Number.isFinite(turn) ? turn : 0
 }
 
+/** 计数类事件统一按 `data.turn` 归轮；解析不出轮次就不匹配。 */
+function toMatch(event: unknown): MatchResult | null {
+  const turn = contextTurn(event)
+  return turn === 0 ? null : { id: String(turn), role: 'start' }
+}
+
 /**
  * 消费一个事件，推进内部状态。
  *
@@ -126,6 +134,21 @@ function advance(state: TurnState | undefined, event: unknown, turnId: number): 
       route: state?.route ?? { turn, phases: [] },
       stepStarts,
       metrics: state?.metrics ?? createAccumulator(turn),
+    }
+  }
+
+  // 计数类事件：工具调用 / 重试 / 轮次结束。它们不带 usage，但属于
+  // 「这一轮发生了什么」，单独累加。
+  const counters = readCounters(event)
+  if (counters.toolCall > 0 || counters.retry > 0 || counters.endReason !== null) {
+    const base: TurnState = state ?? {
+      route: { turn: turnId, phases: [] },
+      stepStarts: new Map(),
+      metrics: createAccumulator(turnId),
+    }
+    return {
+      ...base,
+      metrics: accumulateCounters(base.metrics, counters, base.route.turn),
     }
   }
 
@@ -161,7 +184,7 @@ function advance(state: TurnState | undefined, event: unknown, turnId: number): 
 const definition: NodeDefinition = {
   kind: ROUTE_KIND,
 
-  // 表形式：引擎按事件类型分发，只为这两个类型调用我们。
+  // 表形式：引擎按事件类型分发。
   match: {
     'step/start': (event) => {
       const start = readStepStart(event)
@@ -176,6 +199,10 @@ const definition: NodeDefinition = {
       if (sample === null) return null
       return { id: String(sample.turn), role: 'start' }
     },
+    // 计数类事件：工具调用、重试、轮次结束。都带 turn，直接归到对应轮次。
+    'tool/call': (event) => toMatch(event),
+    'llm/retry': (event) => toMatch(event),
+    'turn/end': (event) => toMatch(event),
   },
 
   start: (_context, match) => advance(undefined, match.event, contextTurn(match.event)),

@@ -40,8 +40,18 @@ export interface TurnMetrics {
   readonly e2eSpeed: number | null
   /** 总耗时：最后完成 - 最先开始，ms */
   readonly elapsedMs: number | null
-  /** 本轮输出 token 总和 */
+  /** 本轮输出 token 总和（含思考） */
   readonly outputTokens: number | null
+  /** 本轮新增输入 token 总和（不含缓存命中） */
+  readonly inputTokens: number | null
+  /** 本轮缓存命中的 token 总和 */
+  readonly cacheReadTokens: number | null
+  /** 本轮工具调用次数 */
+  readonly toolCalls: number | null
+  /** 本轮模型重试次数 */
+  readonly retries: number | null
+  /** 本轮结束原因：completed / aborted / error / interrupted */
+  readonly endReason: string | null
 }
 
 /** 参与计算的一次模型调用的原始时间点。 */
@@ -51,6 +61,8 @@ export interface StepSample {
   readonly firstTokenTime: number | null
   readonly endTime: number
   readonly outputTokens: number | null
+  readonly inputTokens: number | null
+  readonly cacheReadTokens: number | null
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
@@ -135,7 +147,35 @@ export function readStepSample(event: unknown, stepStarts: ReadonlyMap<string, n
     firstTokenTime,
     endTime,
     outputTokens: readNumber(usage, 'outputTokens'),
+    inputTokens: readNumber(usage, 'inputTokens'),
+    cacheReadTokens: readNumber(usage, 'cacheReadTokens'),
   }
+}
+
+/**
+ * 从单个事件里读出与速度无关的计数增量。
+ *
+ * 覆盖 `tool/call`、`llm/retry`、`turn/end` 三类 —— 它们都不带 usage，
+ * 但会影响「这一轮到底顺不顺利」的判断。
+ *
+ * @param event - 任意原始事件
+ * @returns 计数增量；与本题无关时各字段为 0 / null
+ */
+export function readCounters(event: unknown): {
+  toolCall: number
+  retry: number
+  endReason: string | null
+} {
+  const envelope = readRecord(event)
+  const type = envelope?.['type']
+  if (type === 'tool/call') return { toolCall: 1, retry: 0, endReason: null }
+  if (type === 'llm/retry') return { toolCall: 0, retry: 1, endReason: null }
+  if (type === 'turn/end') {
+    const reason = readRecord(readRecord(envelope?.['data'])?.['reason'])
+    const kind = reason?.['kind']
+    return { toolCall: 0, retry: 0, endReason: typeof kind === 'string' ? kind : null }
+  }
+  return { toolCall: 0, retry: 0, endReason: null }
 }
 
 /**
@@ -153,6 +193,13 @@ export interface MetricsAccumulator {
   decodeTokens: number
   outputSum: number
   hasOutput: boolean
+  inputSum: number
+  hasInput: boolean
+  cacheSum: number
+  hasCache: boolean
+  toolCalls: number
+  retries: number
+  endReason: string | null
   firstStart: number | null
   lastEnd: number | null
 }
@@ -168,50 +215,78 @@ export function createAccumulator(turn: number): MetricsAccumulator {
     decodeTokens: 0,
     outputSum: 0,
     hasOutput: false,
+    inputSum: 0,
+    hasInput: false,
+    cacheSum: 0,
+    hasCache: false,
+    toolCalls: 0,
+    retries: 0,
+    endReason: null,
     firstStart: null,
     lastEnd: null,
   }
 }
 
 /**
- * 把一个样本并入累加器，返回新的累加器（不修改入参，便于 React 判断引用变化）。
+ * 把一次 `assistant/message` 样本并入累加器。
  *
  * @param acc - 现有累加器，无则传 undefined
  * @param sample - 新的样本
  */
 export function accumulateMetrics(acc: MetricsAccumulator | undefined, sample: StepSample): MetricsAccumulator {
   const base = acc === undefined || acc.turn !== sample.turn ? createAccumulator(sample.turn) : acc
-
-  let { ttftSum, ttftCount, decodeMsSum, decodeTokens, outputSum, hasOutput, firstStart, lastEnd } = base
+  const next = { ...base }
+  next.steps = base.steps + 1
 
   if (sample.startTime !== null && sample.firstTokenTime !== null) {
-    ttftSum += Math.max(0, sample.firstTokenTime - sample.startTime)
-    ttftCount += 1
+    next.ttftSum = base.ttftSum + Math.max(0, sample.firstTokenTime - sample.startTime)
+    next.ttftCount = base.ttftCount + 1
   }
   if (sample.firstTokenTime !== null) {
-    decodeMsSum += Math.max(0, sample.endTime - sample.firstTokenTime)
-    if (sample.outputTokens !== null) decodeTokens += sample.outputTokens
+    next.decodeMsSum = base.decodeMsSum + Math.max(0, sample.endTime - sample.firstTokenTime)
+    if (sample.outputTokens !== null) next.decodeTokens = base.decodeTokens + sample.outputTokens
   }
   if (sample.outputTokens !== null) {
-    outputSum += sample.outputTokens
-    hasOutput = true
+    next.outputSum = base.outputSum + sample.outputTokens
+    next.hasOutput = true
+  }
+  if (sample.inputTokens !== null) {
+    next.inputSum = base.inputSum + sample.inputTokens
+    next.hasInput = true
+  }
+  if (sample.cacheReadTokens !== null) {
+    next.cacheSum = base.cacheSum + sample.cacheReadTokens
+    next.hasCache = true
   }
   if (sample.startTime !== null) {
-    firstStart = firstStart === null ? sample.startTime : Math.min(firstStart, sample.startTime)
+    next.firstStart = base.firstStart === null ? sample.startTime : Math.min(base.firstStart, sample.startTime)
   }
-  lastEnd = lastEnd === null ? sample.endTime : Math.max(lastEnd, sample.endTime)
+  next.lastEnd = base.lastEnd === null ? sample.endTime : Math.max(base.lastEnd, sample.endTime)
 
+  return next
+}
+
+/**
+ * 把计数类事件并入累加器（工具调用、重试、结束原因）。
+ *
+ * 这些事件不带 usage，但同样属于「这一轮发生了什么」，所以要单独累加。
+ *
+ * @param acc - 现有累加器，无则传 undefined
+ * @param counters - `readCounters` 的结果
+ * @param turn - 所属轮次（用于首次创建）
+ */
+export function accumulateCounters(
+  acc: MetricsAccumulator | undefined,
+  counters: { toolCall: number; retry: number; endReason: string | null },
+  turn: number,
+): MetricsAccumulator {
+  const base = acc === undefined || acc.turn !== turn ? createAccumulator(turn) : acc
+  if (counters.toolCall === 0 && counters.retry === 0 && counters.endReason === null) return base
   return {
-    turn: base.turn,
-    steps: base.steps + 1,
-    ttftSum,
-    ttftCount,
-    decodeMsSum,
-    decodeTokens,
-    outputSum,
-    hasOutput,
-    firstStart,
-    lastEnd,
+    ...base,
+    toolCalls: base.toolCalls + counters.toolCall,
+    retries: base.retries + counters.retry,
+    endReason: counters.endReason ?? base.endReason,
   }
 }
 
@@ -231,6 +306,12 @@ export function finalizeMetrics(acc: MetricsAccumulator): TurnMetrics {
       elapsedMs !== null && elapsedMs > 0 && acc.hasOutput ? acc.outputSum / (elapsedMs / 1000) : null,
     elapsedMs,
     outputTokens: acc.hasOutput ? acc.outputSum : null,
+    inputTokens: acc.hasInput ? acc.inputSum : null,
+    cacheReadTokens: acc.hasCache ? acc.cacheSum : null,
+    // 计数为 0 时返回 null 而不是 0：界面上「0 次工具」没有信息量
+    toolCalls: acc.toolCalls > 0 ? acc.toolCalls : null,
+    retries: acc.retries > 0 ? acc.retries : null,
+    endReason: acc.endReason,
   }
 }
 
