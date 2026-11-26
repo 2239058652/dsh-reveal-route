@@ -234,17 +234,3 @@ export function finalizeMetrics(acc: MetricsAccumulator): TurnMetrics {
   }
 }
 
-/**
- * 把一轮的所有样本汇总成指标（一次性版本，保留给测试与外部调用）。
- *
- * @param turn - 轮次号
- * @param samples - 该轮的所有样本，顺序不限
- * @returns 汇总结果；无相关样本时返回 null
- */
-export function summarizeTurn(turn: number, samples: readonly StepSample[]): TurnMetrics | null {
-  const relevant = samples.filter((sample) => sample.turn === turn)
-  if (relevant.length === 0) return null
-  let acc: MetricsAccumulator | undefined
-  for (const sample of relevant) acc = accumulateMetrics(acc, sample)
-  return acc === undefined ? null : finalizeMetrics(acc)
-}

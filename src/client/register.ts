@@ -94,17 +94,31 @@ export type { EventsRegistry }
 /** 匹配阶段只判断事件形状，不需要真实时间表。 */
 const EMPTY_STARTS: ReadonlyMap<string, number> = new Map()
 
+/** 从事件里读出轮次号；两个事件类型都带 `data.turn`。 */
+function contextTurn(event: unknown): number {
+  const record = typeof event === 'object' && event !== null ? (event as Record<string, unknown>) : {}
+  const data = record['data']
+  const turn =
+    typeof data === 'object' && data !== null ? (data as Record<string, unknown>)['turn'] : undefined
+  return typeof turn === 'number' && Number.isFinite(turn) ? turn : 0
+}
+
 /**
  * 消费一个事件，推进内部状态。
  *
+ * 引擎对返回值有硬性要求：`start()`/`update()` **不能返回 undefined**
+ * （见 ui-conversation 的 `requireState`，返回 undefined 会直接抛异常，
+ * 中断整个 Conversation 渲染）。所以这里宁可返回一个空状态，也不返回 null。
+ *
  * @param state - 已有状态（首次为 undefined）
  * @param event - 原始事件
- * @returns 新状态；事件与本题无关时返回 null
+ * @param turnId - 该 Context 所属的轮次号，用于事件本身解析不出轮次时兜底
+ * @returns 新状态
  */
-function advance(state: TurnState | undefined, event: unknown): TurnState | null {
+function advance(state: TurnState | undefined, event: unknown, turnId: number): TurnState {
   const start = readStepStart(event)
   if (start !== null) {
-    const turn = Number(start.key.slice(0, start.key.indexOf(':')))
+    const turn = turnId
     const stepStarts = new Map(state?.stepStarts ?? [])
     stepStarts.set(start.key, start.time)
     // 只有 step/start 时路由还是空的，先记时间表等 assistant/message。
@@ -120,7 +134,10 @@ function advance(state: TurnState | undefined, event: unknown): TurnState | null
   // 一个样本都记不到，性能指标永远为空。
   const stepStarts = state?.stepStarts ?? new Map<string, number>()
   const sample = readStepSample(event, stepStarts)
-  if (sample === null) return null
+  if (sample === null) {
+    // 结构不认识的事件不该进到这里（match 已过滤），兜底返回原状态而不是 null。
+    return state ?? { route: { turn: turnId, phases: [] }, stepStarts, metrics: createAccumulator(turnId) }
+  }
 
   const observation = readRoute(event)
   const route =
@@ -161,9 +178,9 @@ const definition: NodeDefinition = {
     },
   },
 
-  start: (_context, match) => advance(undefined, match.event),
+  start: (_context, match) => advance(undefined, match.event, contextTurn(match.event)),
 
-  update: (context, match) => advance(context.state, match.event),
+  update: (context, match) => advance(context.state, match.event, context.state?.route.turn ?? contextTurn(match.event)),
 
   buildLocationData: (context, scope, previous) => {
     if (scope !== 'turn') return null

@@ -1,10 +1,11 @@
 /**
- * 徽标组件：本轮模型使用的变化过程。
+ * 徽标组件：本轮的模型路由 + 性能指标。
  *
- * 挂在 `conversation.chat.turnTail`（每轮动作行之前）。没有观察值就返回 null，
- * 所以显式模型的轮次、以及不写 replayState 的 provider 完全看不到它。
+ * 挂在 `conversation.chat.turnTail`（每轮动作行之前）。**没有数据时返回 null**：
+ * 路由部分只在「上游改写了模型」时才有内容，指标部分只要这一轮发生过模型请求就有。
+ * 两者都为空（例如某轮被中断、没有任何模型响应）时整块不渲染。
  *
- * 展示规则（按调用顺序，相邻同模型合并）：
+ * 模型链展示规则（按调用顺序，相邻同模型合并）：
  * - 全程同一个模型   → `auto → glm-5.3-flash ×3`
  * - 中途换过模型     → `tierflow_pro → DeepSeek-V4.1-Flash → Qwen3.8-Flash ×2`
  * - 换回原模型       → `A → B → A`（不合并，变回原模型本身是关键信息）
@@ -75,18 +76,28 @@ function tooltip(phases: readonly RoutePhase[]): string {
 
 function formatMs(value: number | null): string | null {
   if (value === null) return null
-  if (value < 1000) return `${Math.round(value)}ms`
   const seconds = value / 1000
-  // 一分钟以上换成「1m23s」，98.7s 这种读起来要换算
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const whole = Math.round(seconds)
-  return `${Math.floor(whole / 60)}m${String(whole % 60).padStart(2, '0')}s`
+  // 先取整再判断档位，避免 59999ms 显示成 60.0s、同时 60000ms 显示成 1m00s 的不一致
+  const roundedSeconds = Math.round(seconds)
+  if (roundedSeconds < 60) {
+    return value < 1000 ? `${Math.round(value)}ms` : `${seconds.toFixed(1)}s`
+  }
+  if (roundedSeconds < 3600) {
+    return `${Math.floor(roundedSeconds / 60)}m${String(roundedSeconds % 60).padStart(2, '0')}s`
+  }
+  const hours = Math.floor(roundedSeconds / 3600)
+  return `${hours}h${String(Math.floor((roundedSeconds % 3600) / 60)).padStart(2, '0')}m`
 }
 
+/**
+ * 速度取整显示。
+ *
+ * 小于 1 的速度取整会变成 `0 tok/s`，那是无意义的信息 —— 返回 null 让调用方跳过。
+ */
 function formatSpeed(value: number | null): string | null {
   if (value === null) return null
-  // 整数就够看，小数位对扫读没帮助
-  return `${Math.round(value)}`
+  const rounded = Math.round(value)
+  return rounded < 1 ? null : String(rounded)
 }
 
 /**
@@ -124,8 +135,11 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
   /**
    * 判断折叠态是否真的被截断了。
    *
-   * 只在内容装得下时不显示按钮 —— 否则每一轮都挂个没用的「展开」很吵。
+   * 只在确实溢出时显示「展开」按钮 —— 否则每一轮都挂个没用的按钮很吵。
    * 折叠态（nowrap）下 `scrollWidth > clientWidth` 就是溢出。
+   *
+   * 依赖里带上 metrics：一轮里样本是逐个到达的，内容会变长，
+   * 需要重新测量；只在挂载时测一次会导致长轮次漏掉按钮。
    */
   useEffect(() => {
     const element = contentRef.current
@@ -141,7 +155,7 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
     return () => {
       observer.disconnect()
     }
-  }, [expanded, phases.length])
+  }, [expanded, phases.length, metrics.length])
 
   if (phases.length === 0 && metrics.length === 0) return null
 
