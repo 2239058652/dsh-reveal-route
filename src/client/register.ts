@@ -32,11 +32,14 @@ import {
 import {
   accumulateCounters,
   accumulateMetrics,
+  accumulateToolTime,
   createAccumulator,
   finalizeMetrics,
   readCounters,
   readStepSample,
   readStepStart,
+  readToolCall,
+  readToolResult,
   type MetricsAccumulator,
   type TurnMetrics,
 } from './metrics.ts'
@@ -59,6 +62,13 @@ interface TurnState {
    * 全量重算是平方级。累加器每来一个样本只更新 O(1) 个数字。
    */
   readonly metrics: MetricsAccumulator
+  /**
+   * 进行中的工具调用：callId → 开始时间。
+   *
+   * `tool/call` 时登记，`tool/result` 时取出配对算耗时。
+   * 未配对的（轮次被中止）随 Context 一起丢弃，不会泄漏到下一轮。
+   */
+  readonly pendingTools: ReadonlyMap<string, number>
 }
 
 /** Definition 只用到这几个字段；写成结构化契约，宿主换实现时这里不必跟着改。 */
@@ -134,17 +144,55 @@ function advance(state: TurnState | undefined, event: unknown, turnId: number): 
       route: state?.route ?? { turn, phases: [] },
       stepStarts,
       metrics: state?.metrics ?? createAccumulator(turn),
+      pendingTools: state?.pendingTools ?? new Map(),
     }
   }
 
-  // 计数类事件：工具调用 / 重试 / 轮次结束。它们不带 usage，但属于
-  // 「这一轮发生了什么」，单独累加。
-  const counters = readCounters(event)
-  if (counters.toolCall > 0 || counters.retry > 0 || counters.endReason !== null) {
+  // 工具调用开始：登记 pending，等 result 配对
+  const toolCall = readToolCall(event)
+  if (toolCall !== null) {
     const base: TurnState = state ?? {
       route: { turn: turnId, phases: [] },
       stepStarts: new Map(),
       metrics: createAccumulator(turnId),
+      pendingTools: new Map(),
+    }
+    const pendingTools = new Map(base.pendingTools)
+    pendingTools.set(toolCall.callId, toolCall.time)
+    return {
+      ...base,
+      pendingTools,
+      // tool/call 本身也要计数（readCounters 会返回 toolCall:1）
+      metrics: accumulateCounters(base.metrics, { toolCall: 1, retry: 0, endReason: null }, base.route.turn),
+    }
+  }
+
+  // 工具结果：配对算耗时
+  const toolResult = readToolResult(event)
+  if (toolResult !== null) {
+    if (state === undefined) {
+      // result 先于 call 到达（历史重放窗口截断）——没有起点可算，忽略
+      return { route: { turn: turnId, phases: [] }, stepStarts: new Map(), metrics: createAccumulator(turnId), pendingTools: new Map() }
+    }
+    const startTime = state.pendingTools.get(toolResult.callId)
+    if (startTime === undefined) return state
+    const pendingTools = new Map(state.pendingTools)
+    pendingTools.delete(toolResult.callId)
+    return {
+      ...state,
+      pendingTools,
+      metrics: accumulateToolTime(state.metrics, toolResult.time - startTime, state.route.turn),
+    }
+  }
+
+  // 计数类事件：重试 / 轮次结束（tool/call 已在上面单独处理）
+  const counters = readCounters(event)
+  if (counters.retry > 0 || counters.endReason !== null) {
+    const base: TurnState = state ?? {
+      route: { turn: turnId, phases: [] },
+      stepStarts: new Map(),
+      metrics: createAccumulator(turnId),
+      pendingTools: new Map(),
     }
     return {
       ...base,
@@ -153,13 +201,18 @@ function advance(state: TurnState | undefined, event: unknown, turnId: number): 
   }
 
   // 指标与路由解耦：**每次模型请求都要记样本**，不管上游有没有改写路由。
-  // 早先这里在 readRoute 返回 undefined 时直接 bail，导致「模型没变」的轮次
-  // 一个样本都记不到，性能指标永远为空。
   const stepStarts = state?.stepStarts ?? new Map<string, number>()
   const sample = readStepSample(event, stepStarts)
   if (sample === null) {
     // 结构不认识的事件不该进到这里（match 已过滤），兜底返回原状态而不是 null。
-    return state ?? { route: { turn: turnId, phases: [] }, stepStarts, metrics: createAccumulator(turnId) }
+    return (
+      state ?? {
+        route: { turn: turnId, phases: [] },
+        stepStarts,
+        metrics: createAccumulator(turnId),
+        pendingTools: new Map(),
+      }
+    )
   }
 
   const observation = readRoute(event)
@@ -172,6 +225,7 @@ function advance(state: TurnState | undefined, event: unknown, turnId: number): 
     route,
     stepStarts,
     metrics: accumulateMetrics(state?.metrics, sample),
+    pendingTools: state?.pendingTools ?? new Map(),
   }
 }
 
@@ -199,8 +253,9 @@ const definition: NodeDefinition = {
       if (sample === null) return null
       return { id: String(sample.turn), role: 'start' }
     },
-    // 计数类事件：工具调用、重试、轮次结束。都带 turn，直接归到对应轮次。
+    // 计数类事件：工具调用、工具结果、重试、轮次结束。都带 turn，直接归到对应轮次。
     'tool/call': (event) => toMatch(event),
+    'tool/result': (event) => toMatch(event),
     'llm/retry': (event) => toMatch(event),
     'turn/end': (event) => toMatch(event),
   },

@@ -132,6 +132,8 @@ interface MetricPart {
   readonly label: string
   readonly value: string
   readonly tone: PartTone
+  /** 补充说明，挂在片段的 title 上 */
+  readonly title?: string
 }
 
 /**
@@ -151,6 +153,10 @@ function speedParts(metrics: TurnMetrics | undefined): MetricPart[] {
   if (e2e !== null) parts.push({ label: '整体', value: `${e2e} tok/s`, tone: 'speed' })
   const elapsed = formatMs(metrics.elapsedMs)
   if (elapsed !== null) parts.push({ label: '耗时', value: elapsed, tone: 'speed' })
+  // 等首字占比：直接回答「慢在哪」。<10% 时首字不是瓶颈，不必显示
+  if (metrics.ttftShare !== null && metrics.ttftShare >= 0.1) {
+    parts.push({ label: '等首字', value: `${Math.round(metrics.ttftShare * 100)}%`, tone: 'value' })
+  }
   return parts
 }
 
@@ -164,12 +170,29 @@ function usageParts(metrics: TurnMetrics | undefined): MetricPart[] {
   const parts: MetricPart[] = []
   const input = formatCount(metrics.inputTokens)
   if (input !== null) parts.push({ label: '入', value: input, tone: 'value' })
-  const cache = formatCount(metrics.cacheReadTokens)
-  if (cache !== null) parts.push({ label: '缓存', value: cache, tone: 'value' })
+  // 缓存显示命中率而非绝对值：命中率才解释首字快慢。
+  // 绝对 token 数没有速度含义，放在 title 里供查看。
+  if (metrics.cacheHitRate !== null) {
+    const absolute = formatCount(metrics.cacheReadTokens)
+    parts.push({
+      label: '缓存',
+      value: `${Math.round(metrics.cacheHitRate * 100)}%`,
+      tone: 'value',
+      title: absolute === null ? undefined : `缓存命中 ${absolute} tok`,
+    })
+  }
   const output = formatCount(metrics.outputTokens)
   if (output !== null) parts.push({ label: '出', value: output, tone: 'value' })
   if (metrics.steps > 0) parts.push({ label: '', value: `${metrics.steps} 步`, tone: 'value' })
-  if (metrics.toolCalls !== null) parts.push({ label: '工具', value: String(metrics.toolCalls), tone: 'value' })
+  // 工具：次数 + 总耗时（能配对的才算，未配对的轮次只有次数）
+  if (metrics.toolCalls !== null) {
+    const time = metrics.toolMs === null ? null : formatMs(metrics.toolMs)
+    parts.push({
+      label: '工具',
+      value: time === null ? String(metrics.toolCalls) : `${metrics.toolCalls} · ${time}`,
+      tone: 'value',
+    })
+  }
   if (metrics.retries !== null) parts.push({ label: '重试', value: String(metrics.retries), tone: 'warn' })
   // 正常完成的轮次不标状态；被中止/出错才值得提示
   if (metrics.endReason !== null && metrics.endReason !== 'completed') {
@@ -183,7 +206,7 @@ function usageParts(metrics: TurnMetrics | undefined): MetricPart[] {
 function renderPart(part: MetricPart, index: number): React.JSX.Element {
   const toneClass = part.tone === 'speed' ? CSS.speed : part.tone === 'warn' ? CSS.warn : CSS.value
   return (
-    <span key={`${index}:${part.label}:${part.value}`} className={CSS.seg}>
+    <span key={`${index}:${part.label}:${part.value}`} className={CSS.seg} title={part.title}>
       {index > 0 ? <span className={CSS.sep} aria-hidden="true">·</span> : null}
       {part.label === '' ? null : <span className={CSS.label}>{part.label} </span>}
       <span className={toneClass}>{part.value}</span>

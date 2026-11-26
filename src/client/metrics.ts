@@ -46,8 +46,14 @@ export interface TurnMetrics {
   readonly inputTokens: number | null
   /** 本轮缓存命中的 token 总和 */
   readonly cacheReadTokens: number | null
+  /** 缓存命中率：cacheRead / (input + cacheRead)，0~1 */
+  readonly cacheHitRate: number | null
+  /** 等首字占总耗时的比例，0~1；分母缺失时为 null */
+  readonly ttftShare: number | null
   /** 本轮工具调用次数 */
   readonly toolCalls: number | null
+  /** 本轮工具执行总耗时（call→result 配对），ms */
+  readonly toolMs: number | null
   /** 本轮模型重试次数 */
   readonly retries: number | null
   /** 本轮结束原因：completed / aborted / error / interrupted */
@@ -153,6 +159,41 @@ export function readStepSample(event: unknown, stepStarts: ReadonlyMap<string, n
 }
 
 /**
+ * 从 `tool/result` 事件里读出配对信息。
+ *
+ * `tool/result` 顶层 data 没有 callId，它在 `data.message.toolCallId` 里 ——
+ * 已用真实会话日志验证（result 与 call 一一对应，result 紧跟 call 之后）。
+ *
+ * @param event - `tool/result` 事件
+ * @returns callId 与完成时间；结构不认识时返回 null
+ */
+export function readToolResult(event: unknown): { callId: string; time: number } | null {
+  const envelope = readRecord(event)
+  if (envelope?.['type'] !== 'tool/result') return null
+  const data = readRecord(envelope['data'])
+  const message = readRecord(data?.['message'])
+  const callId = message?.['toolCallId']
+  const time = readNumber(envelope, 'time')
+  if (typeof callId !== 'string' || callId === '' || time === null) return null
+  return { callId, time }
+}
+
+/**
+ * 从 `tool/call` 事件里读出调用开始时间与 callId。
+ *
+ * @param event - `tool/call` 事件
+ */
+export function readToolCall(event: unknown): { callId: string; time: number } | null {
+  const envelope = readRecord(event)
+  if (envelope?.['type'] !== 'tool/call') return null
+  const data = readRecord(envelope['data'])
+  const callId = data?.['callId']
+  const time = readNumber(envelope, 'time')
+  if (typeof callId !== 'string' || callId === '' || time === null) return null
+  return { callId, time }
+}
+
+/**
  * 从单个事件里读出与速度无关的计数增量。
  *
  * 覆盖 `tool/call`、`llm/retry`、`turn/end` 三类 —— 它们都不带 usage，
@@ -198,6 +239,8 @@ export interface MetricsAccumulator {
   cacheSum: number
   hasCache: boolean
   toolCalls: number
+  toolMsSum: number
+  hasToolMs: boolean
   retries: number
   endReason: string | null
   firstStart: number | null
@@ -220,6 +263,8 @@ export function createAccumulator(turn: number): MetricsAccumulator {
     cacheSum: 0,
     hasCache: false,
     toolCalls: 0,
+    toolMsSum: 0,
+    hasToolMs: false,
     retries: 0,
     endReason: null,
     firstStart: null,
@@ -291,12 +336,26 @@ export function accumulateCounters(
 }
 
 /**
+ * 把一次工具执行的耗时并入累加器。
+ *
+ * @param acc - 现有累加器
+ * @param ms - call → result 的时间差，负数按 0 处理
+ * @param turn - 所属轮次
+ */
+export function accumulateToolTime(acc: MetricsAccumulator | undefined, ms: number, turn: number): MetricsAccumulator {
+  const base = acc === undefined || acc.turn !== turn ? createAccumulator(turn) : acc
+  return { ...base, toolMsSum: base.toolMsSum + Math.max(0, ms), hasToolMs: true }
+}
+
+/**
  * 从累加器算出对外发布的指标。
  *
  * @param acc - 累加器
  */
 export function finalizeMetrics(acc: MetricsAccumulator): TurnMetrics {
   const elapsedMs = acc.firstStart === null || acc.lastEnd === null ? null : Math.max(0, acc.lastEnd - acc.firstStart)
+  // 缓存命中率的分母是「本次请求实际处理的输入」= 新增输入 + 缓存命中
+  const cacheDenominator = acc.inputSum + acc.cacheSum
   return {
     turn: acc.turn,
     steps: acc.steps,
@@ -308,8 +367,11 @@ export function finalizeMetrics(acc: MetricsAccumulator): TurnMetrics {
     outputTokens: acc.hasOutput ? acc.outputSum : null,
     inputTokens: acc.hasInput ? acc.inputSum : null,
     cacheReadTokens: acc.hasCache ? acc.cacheSum : null,
+    cacheHitRate: acc.hasCache && cacheDenominator > 0 ? acc.cacheSum / cacheDenominator : null,
+    ttftShare: elapsedMs !== null && elapsedMs > 0 && acc.ttftSum > 0 ? Math.min(1, acc.ttftSum / elapsedMs) : null,
     // 计数为 0 时返回 null 而不是 0：界面上「0 次工具」没有信息量
     toolCalls: acc.toolCalls > 0 ? acc.toolCalls : null,
+    toolMs: acc.hasToolMs ? acc.toolMsSum : null,
     retries: acc.retries > 0 ? acc.retries : null,
     endReason: acc.endReason,
   }
