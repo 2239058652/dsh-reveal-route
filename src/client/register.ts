@@ -30,10 +30,12 @@ import {
   type TurnRoute,
 } from './route.ts'
 import {
+  accumulateMetrics,
+  createAccumulator,
+  finalizeMetrics,
   readStepSample,
   readStepStart,
-  summarizeTurn,
-  type StepSample,
+  type MetricsAccumulator,
   type TurnMetrics,
 } from './metrics.ts'
 
@@ -48,7 +50,13 @@ interface TurnState {
   readonly route: TurnRoute
   /** `step/start` 时间表，键为 `轮:步` */
   readonly stepStarts: ReadonlyMap<string, number>
-  readonly samples: readonly StepSample[]
+  /**
+   * 增量累加的指标状态。
+   *
+   * 不用「存全部样本再每次重算」：会话可能几百轮、每次模型请求都触发一次汇总，
+   * 全量重算是平方级。累加器每来一个样本只更新 O(1) 个数字。
+   */
+  readonly metrics: MetricsAccumulator
 }
 
 /** Definition 只用到这几个字段；写成结构化契约，宿主换实现时这里不必跟着改。 */
@@ -103,7 +111,7 @@ function advance(state: TurnState | undefined, event: unknown): TurnState | null
     return {
       route: state?.route ?? { turn, phases: [] },
       stepStarts,
-      samples: state?.samples ?? [],
+      metrics: state?.metrics ?? createAccumulator(turn),
     }
   }
 
@@ -115,12 +123,15 @@ function advance(state: TurnState | undefined, event: unknown): TurnState | null
   if (sample === null) return null
 
   const observation = readRoute(event)
-  const route = observation === undefined ? (state?.route ?? { turn: sample.turn, phases: [] }) : accumulateRoute(state?.route, observation)
+  const route =
+    observation === undefined
+      ? (state?.route ?? { turn: sample.turn, phases: [] })
+      : accumulateRoute(state?.route, observation)
 
   return {
     route,
     stepStarts,
-    samples: sample === null ? (state?.samples ?? []) : [...(state?.samples ?? []), sample],
+    metrics: accumulateMetrics(state?.metrics, sample),
   }
 }
 
@@ -158,20 +169,11 @@ const definition: NodeDefinition = {
     if (scope !== 'turn') return null
     const state = context.state
     if (state === undefined) return null
-    const turn = state.route.turn
-    const metrics: TurnMetrics = summarizeTurn(turn, state.samples) ?? {
-      turn,
-      steps: state.samples.filter((sample) => sample.turn === turn).length,
-      avgTtftMs: null,
-      decodeSpeed: null,
-      e2eSpeed: null,
-      elapsedMs: null,
-      outputTokens: null,
-    }
+    const metrics: TurnMetrics = finalizeMetrics(state.metrics)
     const value: TurnReveal = { route: state.route, metrics }
     // 值没变时返回同一个对象，避免每轮无谓的订阅通知。
-    if (previous !== null && previous.turn === turn && previous.value === value) return previous
-    return { kind: 'turn', turn, key: ROUTE_KIND, value }
+    if (previous !== null && previous.turn === metrics.turn && previous.value === value) return previous
+    return { kind: 'turn', turn: metrics.turn, key: ROUTE_KIND, value }
   },
 }
 

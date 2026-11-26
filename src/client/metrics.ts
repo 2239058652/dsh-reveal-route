@@ -139,7 +139,103 @@ export function readStepSample(event: unknown, stepStarts: ReadonlyMap<string, n
 }
 
 /**
- * 把一轮的所有样本汇总成指标。
+ * 把样本累加进汇总状态（增量版，避免每次重算都遍历全部历史样本）。
+ *
+ * 会话可能有几百轮、每次模型请求都会触发一次汇总，全量 filter 是平方级复杂度。
+ * 这里把汇总量维护成可累加的形式，每来一个样本只更新 O(1) 个数。
+ */
+export interface MetricsAccumulator {
+  turn: number
+  steps: number
+  ttftSum: number
+  ttftCount: number
+  decodeMsSum: number
+  decodeTokens: number
+  outputSum: number
+  hasOutput: boolean
+  firstStart: number | null
+  lastEnd: number | null
+}
+
+/** 新建一个空累加器。 */
+export function createAccumulator(turn: number): MetricsAccumulator {
+  return {
+    turn,
+    steps: 0,
+    ttftSum: 0,
+    ttftCount: 0,
+    decodeMsSum: 0,
+    decodeTokens: 0,
+    outputSum: 0,
+    hasOutput: false,
+    firstStart: null,
+    lastEnd: null,
+  }
+}
+
+/**
+ * 把一个样本并入累加器，返回新的累加器（不修改入参，便于 React 判断引用变化）。
+ *
+ * @param acc - 现有累加器，无则传 undefined
+ * @param sample - 新的样本
+ */
+export function accumulateMetrics(acc: MetricsAccumulator | undefined, sample: StepSample): MetricsAccumulator {
+  const base = acc === undefined || acc.turn !== sample.turn ? createAccumulator(sample.turn) : acc
+
+  let { ttftSum, ttftCount, decodeMsSum, decodeTokens, outputSum, hasOutput, firstStart, lastEnd } = base
+
+  if (sample.startTime !== null && sample.firstTokenTime !== null) {
+    ttftSum += Math.max(0, sample.firstTokenTime - sample.startTime)
+    ttftCount += 1
+  }
+  if (sample.firstTokenTime !== null) {
+    decodeMsSum += Math.max(0, sample.endTime - sample.firstTokenTime)
+    if (sample.outputTokens !== null) decodeTokens += sample.outputTokens
+  }
+  if (sample.outputTokens !== null) {
+    outputSum += sample.outputTokens
+    hasOutput = true
+  }
+  if (sample.startTime !== null) {
+    firstStart = firstStart === null ? sample.startTime : Math.min(firstStart, sample.startTime)
+  }
+  lastEnd = lastEnd === null ? sample.endTime : Math.max(lastEnd, sample.endTime)
+
+  return {
+    turn: base.turn,
+    steps: base.steps + 1,
+    ttftSum,
+    ttftCount,
+    decodeMsSum,
+    decodeTokens,
+    outputSum,
+    hasOutput,
+    firstStart,
+    lastEnd,
+  }
+}
+
+/**
+ * 从累加器算出对外发布的指标。
+ *
+ * @param acc - 累加器
+ */
+export function finalizeMetrics(acc: MetricsAccumulator): TurnMetrics {
+  const elapsedMs = acc.firstStart === null || acc.lastEnd === null ? null : Math.max(0, acc.lastEnd - acc.firstStart)
+  return {
+    turn: acc.turn,
+    steps: acc.steps,
+    avgTtftMs: acc.ttftCount === 0 ? null : acc.ttftSum / acc.ttftCount,
+    decodeSpeed: acc.decodeMsSum > 0 && acc.decodeTokens > 0 ? acc.decodeTokens / (acc.decodeMsSum / 1000) : null,
+    e2eSpeed:
+      elapsedMs !== null && elapsedMs > 0 && acc.hasOutput ? acc.outputSum / (elapsedMs / 1000) : null,
+    elapsedMs,
+    outputTokens: acc.hasOutput ? acc.outputSum : null,
+  }
+}
+
+/**
+ * 把一轮的所有样本汇总成指标（一次性版本，保留给测试与外部调用）。
  *
  * @param turn - 轮次号
  * @param samples - 该轮的所有样本，顺序不限
@@ -148,45 +244,7 @@ export function readStepSample(event: unknown, stepStarts: ReadonlyMap<string, n
 export function summarizeTurn(turn: number, samples: readonly StepSample[]): TurnMetrics | null {
   const relevant = samples.filter((sample) => sample.turn === turn)
   if (relevant.length === 0) return null
-
-  let ttftSum = 0
-  let ttftCount = 0
-  let decodeMsSum = 0
-  let decodeTokens = 0
-  let outputSum = 0
-  let hasOutput = false
-  let firstStart: number | null = null
-  let lastEnd: number | null = null
-
-  for (const sample of relevant) {
-    if (sample.startTime !== null && sample.firstTokenTime !== null) {
-      const ttft = Math.max(0, sample.firstTokenTime - sample.startTime)
-      ttftSum += ttft
-      ttftCount += 1
-    }
-    if (sample.firstTokenTime !== null) {
-      decodeMsSum += Math.max(0, sample.endTime - sample.firstTokenTime)
-      if (sample.outputTokens !== null) decodeTokens += sample.outputTokens
-    }
-    if (sample.outputTokens !== null) {
-      outputSum += sample.outputTokens
-      hasOutput = true
-    }
-    if (sample.startTime !== null) {
-      firstStart = firstStart === null ? sample.startTime : Math.min(firstStart, sample.startTime)
-    }
-    lastEnd = lastEnd === null ? sample.endTime : Math.max(lastEnd, sample.endTime)
-  }
-
-  const elapsedMs = firstStart === null || lastEnd === null ? null : Math.max(0, lastEnd - firstStart)
-
-  return {
-    turn,
-    steps: relevant.length,
-    avgTtftMs: ttftCount === 0 ? null : ttftSum / ttftCount,
-    decodeSpeed: decodeMsSum > 0 && decodeTokens > 0 ? decodeTokens / (decodeMsSum / 1000) : null,
-    e2eSpeed: elapsedMs !== null && elapsedMs > 0 && hasOutput ? outputSum / (elapsedMs / 1000) : null,
-    elapsedMs,
-    outputTokens: hasOutput ? outputSum : null,
-  }
+  let acc: MetricsAccumulator | undefined
+  for (const sample of relevant) acc = accumulateMetrics(acc, sample)
+  return acc === undefined ? null : finalizeMetrics(acc)
 }
