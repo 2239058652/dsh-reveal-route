@@ -29,7 +29,9 @@
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { CSS, ensureStyles } from './styles.ts'
-import { ROUTE_KIND, type RoutePhase, type TurnRoute } from './route.ts'
+import { ROUTE_KIND, type RoutePhase } from './route.ts'
+import type { TurnMetrics } from './metrics.ts'
+import type { TurnReveal } from './register.ts'
 
 /** 只用到 `data.get`。 */
 interface TurnDataStore {
@@ -46,10 +48,14 @@ export interface RouteBadgeProps {
   turn?: unknown
 }
 
-function readPhases(turn: TurnLike | undefined): readonly RoutePhase[] {
+function readReveal(turn: TurnLike | undefined): TurnReveal | undefined {
   const value = turn?.data?.get(ROUTE_KIND)
-  if (typeof value !== 'object' || value === null) return []
-  const phases = (value as Partial<TurnRoute>).phases
+  if (typeof value !== 'object' || value === null) return undefined
+  return value as TurnReveal
+}
+
+function readPhases(turn: TurnLike | undefined): readonly RoutePhase[] {
+  const phases = readReveal(turn)?.route?.phases
   if (!Array.isArray(phases)) return []
   return phases.filter(
     (phase): phase is RoutePhase =>
@@ -67,11 +73,43 @@ function tooltip(phases: readonly RoutePhase[]): string {
     .join('\n')
 }
 
+function formatMs(value: number | null): string | null {
+  if (value === null) return null
+  return value < 1000 ? `${Math.round(value)}ms` : `${(value / 1000).toFixed(1)}s`
+}
+
+function formatSpeed(value: number | null): string | null {
+  if (value === null) return null
+  return `${value.toFixed(1)} tok/s`
+}
+
+/**
+ * 四个指标拼成一行。
+ *
+ * 缺值的项直接跳过，不显示占位符 —— 老会话缺 `step/start` 时 TTFT 会是 null，
+ * 显示「TTFT —」反而干扰阅读。
+ */
+function metricParts(metrics: TurnMetrics | undefined): string[] {
+  if (metrics === undefined) return []
+  const parts: string[] = []
+  const ttft = formatMs(metrics.avgTtftMs)
+  if (ttft !== null) parts.push(`TTFT ${ttft}`)
+  const decode = formatSpeed(metrics.decodeSpeed)
+  if (decode !== null) parts.push(`解码 ${decode}`)
+  const e2e = formatSpeed(metrics.e2eSpeed)
+  if (e2e !== null) parts.push(`端到端 ${e2e}`)
+  const elapsed = formatMs(metrics.elapsedMs)
+  if (elapsed !== null) parts.push(`总耗时 ${elapsed}`)
+  return parts
+}
+
 export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null {
   const [expanded, setExpanded] = useState(false)
   const [overflowing, setOverflowing] = useState(false)
   const contentRef = useRef<HTMLSpanElement | null>(null)
+  const reveal = readReveal(turn as TurnLike | undefined)
   const phases = readPhases(turn as TurnLike | undefined)
+  const metrics = metricParts(reveal?.metrics)
 
   useEffect(() => {
     ensureStyles()
@@ -99,7 +137,7 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
     }
   }, [expanded, phases.length])
 
-  if (phases.length === 0) return null
+  if (phases.length === 0 && metrics.length === 0) return null
 
   // 请求模型全程一致时只写一次，避免每段重复；不一致就各段自带。
   const requested = new Set(phases.map((phase) => phase.requested))
@@ -134,6 +172,13 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
             {phase.served}
             {/* 只有连续用过多次才标次数：×1 没有额外信息 */}
             {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
+          </span>
+        ))}
+        {/* 性能指标跟在模型链后面，用竖线隔开 */}
+        {metrics.map((part) => (
+          <span key={part} className={CSS.metric}>
+            <span className={CSS.sep} aria-hidden="true">·</span>
+            {part}
           </span>
         ))}
       </span>

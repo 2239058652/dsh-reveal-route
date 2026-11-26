@@ -15,6 +15,8 @@ export const CSS = {
   served: 'rvr-served',
   count: 'rvr-count',
   toggle: 'rvr-toggle',
+  metric: 'rvr-metric',
+  sep: 'rvr-sep',
 } as const
 
 const RULES = `
@@ -54,6 +56,11 @@ const RULES = `
   font-family: inherit; font-weight: 400;
   color: var(--dsw-alias-label-tertiary, #8c8c8c);
 }
+.rvr-metric {
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary, #8c8c8c);
+}
+.rvr-sep { margin: 0 5px; opacity: 0.6; }
 .rvr-toggle {
   flex: none; cursor: pointer; align-self: flex-start;
   padding: 1px 6px; border-radius: 5px;
