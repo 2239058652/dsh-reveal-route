@@ -75,31 +75,37 @@ function tooltip(phases: readonly RoutePhase[]): string {
 
 function formatMs(value: number | null): string | null {
   if (value === null) return null
-  return value < 1000 ? `${Math.round(value)}ms` : `${(value / 1000).toFixed(1)}s`
+  if (value < 1000) return `${Math.round(value)}ms`
+  const seconds = value / 1000
+  // 一分钟以上换成「1m23s」，98.7s 这种读起来要换算
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const whole = Math.round(seconds)
+  return `${Math.floor(whole / 60)}m${String(whole % 60).padStart(2, '0')}s`
 }
 
 function formatSpeed(value: number | null): string | null {
   if (value === null) return null
-  return `${value.toFixed(1)} tok/s`
+  // 整数就够看，小数位对扫读没帮助
+  return `${Math.round(value)}`
 }
 
 /**
  * 四个指标拼成一行。
  *
- * 缺值的项直接跳过，不显示占位符 —— 老会话缺 `step/start` 时 TTFT 会是 null，
- * 显示「TTFT —」反而干扰阅读。
+ * 用语尽量不用行话：`首字` 代替 TTFT，`生成` / `全程` 区分两个速度口径。
+ * 缺值的项直接跳过，不显示占位符。
  */
 function metricParts(metrics: TurnMetrics | undefined): string[] {
   if (metrics === undefined) return []
   const parts: string[] = []
   const ttft = formatMs(metrics.avgTtftMs)
-  if (ttft !== null) parts.push(`TTFT ${ttft}`)
+  if (ttft !== null) parts.push(`首字 ${ttft}`)
   const decode = formatSpeed(metrics.decodeSpeed)
-  if (decode !== null) parts.push(`解码 ${decode}`)
+  if (decode !== null) parts.push(`生成 ${decode} tok/s`)
   const e2e = formatSpeed(metrics.e2eSpeed)
-  if (e2e !== null) parts.push(`端到端 ${e2e}`)
+  if (e2e !== null) parts.push(`全程 ${e2e} tok/s`)
   const elapsed = formatMs(metrics.elapsedMs)
-  if (elapsed !== null) parts.push(`总耗时 ${elapsed}`)
+  if (elapsed !== null) parts.push(`耗时 ${elapsed}`)
   return parts
 }
 
@@ -177,10 +183,12 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
             {phase.count > 1 || single ? <span className={CSS.count}> ×{phase.count}</span> : null}
           </span>
         ))}
-        {/* 性能指标跟在模型链后面，用竖线隔开 */}
-        {metrics.map((part) => (
+        {/* 性能指标跟在模型链后面；只有前面确实有内容时才加分隔符 */}
+        {metrics.map((part, index) => (
           <span key={part} className={CSS.metric}>
-            <span className={CSS.sep} aria-hidden="true">·</span>
+            {index === 0 && phases.length === 0 ? null : (
+              <span className={CSS.sep} aria-hidden="true">·</span>
+            )}
             {part}
           </span>
         ))}
