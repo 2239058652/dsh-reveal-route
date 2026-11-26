@@ -119,59 +119,74 @@ function formatCount(value: number | null): string | null {
 }
 
 /**
- * 第一行：速度类指标。
+ * 一个指标片段。
+ *
+ * `tone` 决定数值的颜色：
+ * - `speed` 速度类，主题蓝
+ * - `warn`  异常，警示橙
+ * - `value` 普通用量，次要文字色
+ */
+type PartTone = 'speed' | 'value' | 'warn'
+
+interface MetricPart {
+  readonly label: string
+  readonly value: string
+  readonly tone: PartTone
+}
+
+/**
+ * 速度类指标。
  *
  * 用语尽量不用行话：`首字` 代替 TTFT；`生成` / `整体` 区分两个速度口径 ——
  * 生成只看真正出字的时间，整体把等待首字和工具执行也算进去。
  */
-function speedParts(metrics: TurnMetrics | undefined): string[] {
+function speedParts(metrics: TurnMetrics | undefined): MetricPart[] {
   if (metrics === undefined) return []
-  const parts: string[] = []
+  const parts: MetricPart[] = []
   const ttft = formatMs(metrics.avgTtftMs)
-  if (ttft !== null) parts.push(`首字 ${ttft}`)
+  if (ttft !== null) parts.push({ label: '首字', value: ttft, tone: 'speed' })
   const decode = formatSpeed(metrics.decodeSpeed)
-  if (decode !== null) parts.push(`生成 ${decode} tok/s`)
+  if (decode !== null) parts.push({ label: '生成', value: `${decode} tok/s`, tone: 'speed' })
   const e2e = formatSpeed(metrics.e2eSpeed)
-  if (e2e !== null) parts.push(`整体 ${e2e} tok/s`)
+  if (e2e !== null) parts.push({ label: '整体', value: `${e2e} tok/s`, tone: 'speed' })
   const elapsed = formatMs(metrics.elapsedMs)
-  if (elapsed !== null) parts.push(`耗时 ${elapsed}`)
+  if (elapsed !== null) parts.push({ label: '耗时', value: elapsed, tone: 'speed' })
   return parts
 }
 
 /**
- * 第二行：用量与异常。
+ * 用量与异常。
  *
  * 只显示有值的项 —— 工具 0 次、重试 0 次于读者无意义，直接省略。
  */
-function usageParts(metrics: TurnMetrics | undefined): string[] {
+function usageParts(metrics: TurnMetrics | undefined): MetricPart[] {
   if (metrics === undefined) return []
-  const parts: string[] = []
+  const parts: MetricPart[] = []
   const input = formatCount(metrics.inputTokens)
+  if (input !== null) parts.push({ label: '入', value: input, tone: 'value' })
   const cache = formatCount(metrics.cacheReadTokens)
-  if (input !== null || cache !== null) {
-    const fragments: string[] = []
-    if (input !== null) fragments.push(`入 ${input}`)
-    if (cache !== null) fragments.push(`缓存 ${cache}`)
-    parts.push(fragments.join(' / '))
-  }
+  if (cache !== null) parts.push({ label: '缓存', value: cache, tone: 'value' })
   const output = formatCount(metrics.outputTokens)
-  if (output !== null) parts.push(`出 ${output}`)
-  if (metrics.steps > 0) parts.push(`${metrics.steps} 步`)
-  if (metrics.toolCalls !== null) parts.push(`工具 ${metrics.toolCalls}`)
-  if (metrics.retries !== null) parts.push(`重试 ${metrics.retries}`)
+  if (output !== null) parts.push({ label: '出', value: output, tone: 'value' })
+  if (metrics.steps > 0) parts.push({ label: '', value: `${metrics.steps} 步`, tone: 'value' })
+  if (metrics.toolCalls !== null) parts.push({ label: '工具', value: String(metrics.toolCalls), tone: 'value' })
+  if (metrics.retries !== null) parts.push({ label: '重试', value: String(metrics.retries), tone: 'warn' })
   // 正常完成的轮次不标状态；被中止/出错才值得提示
   if (metrics.endReason !== null && metrics.endReason !== 'completed') {
-    parts.push(metrics.endReason === 'aborted' ? '已中止' : metrics.endReason === 'error' ? '出错' : metrics.endReason)
+    const text = metrics.endReason === 'aborted' ? '已中止' : metrics.endReason === 'error' ? '出错' : metrics.endReason
+    parts.push({ label: '', value: text, tone: 'warn' })
   }
   return parts
 }
 
-/** 把一组文字用 `·` 连接渲染成互不粘连的片段。 */
-function joinPart(className: string): (part: string, index: number) => React.JSX.Element {
-  return (part, index) => (
-    <span key={`${index}:${part}`} className={className}>
+/** 渲染一个指标片段：标签弱、数值按 tone 着色。 */
+function renderPart(part: MetricPart, index: number): React.JSX.Element {
+  const toneClass = part.tone === 'speed' ? CSS.speed : part.tone === 'warn' ? CSS.warn : CSS.value
+  return (
+    <span key={`${index}:${part.label}:${part.value}`} className={CSS.seg}>
       {index > 0 ? <span className={CSS.sep} aria-hidden="true">·</span> : null}
-      {part}
+      {part.label === '' ? null : <span className={CSS.label}>{part.label} </span>}
+      <span className={toneClass}>{part.value}</span>
     </span>
   )
 }
@@ -223,7 +238,7 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
         )}
 
         {/* 第二行：速度与用量，放不下时自然换行 */}
-        {details.length === 0 ? null : <div className={CSS.line}>{details.map(joinPart(CSS.part))}</div>}
+        {details.length === 0 ? null : <div className={CSS.line}>{details.map(renderPart)}</div>}
       </div>
     </div>
   )

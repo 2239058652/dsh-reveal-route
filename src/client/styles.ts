@@ -18,7 +18,11 @@ export const CSS = {
   arrow: 'rvr-arrow',
   served: 'rvr-served',
   count: 'rvr-count',
-  part: 'rvr-part',
+  label: 'rvr-label',
+  value: 'rvr-value',
+  speed: 'rvr-speed',
+  warn: 'rvr-warn',
+  seg: 'rvr-seg',
   sep: 'rvr-sep',
 } as const
 
@@ -48,7 +52,7 @@ const RULES = `
 .rvr-line-chain {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.rvr-arrow { color: var(--dsw-alias-label-tertiary, #8c8c8c); }
+.rvr-arrow { color: var(--dsw-alias-label-caption, #8c8c8c); }
 .rvr-served {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 600;
@@ -58,14 +62,32 @@ const RULES = `
   font-family: inherit; font-weight: 400;
   color: var(--dsw-alias-label-tertiary, #8c8c8c);
 }
-.rvr-part {
-  font-variant-numeric: tabular-nums;
-  color: var(--dsw-alias-label-tertiary, #8c8c8c);
+/* 指标片段：标签弱化、数值加重 */
+.rvr-seg {
   /* 片段之间不拆开：「生成 161 tok/s」整体作为一个不可分割单元 */
   display: inline-block;
   white-space: nowrap;
 }
-.rvr-sep { margin: 0 4px; opacity: 0.6; }
+.rvr-label {
+  color: var(--dsw-alias-label-tertiary, #8c8c8c);
+}
+.rvr-value {
+  color: var(--dsw-alias-label-secondary, #5c5c5c);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+/* 速度类数值用主题蓝强调，和用量类区分开 */
+.rvr-speed {
+  color: var(--dsw-alias-state-business-primary, #4d6bfe);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+/* 异常状态（重试 / 中止 / 出错）用警示色，正常轮次不出现 */
+.rvr-warn {
+  color: var(--dsw-alias-state-warn-primary, #f59e0b);
+  font-weight: 600;
+}
+.rvr-sep { margin: 0 5px; opacity: 0.45; }
 `
 
 let injected = false
