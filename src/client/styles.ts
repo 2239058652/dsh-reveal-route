@@ -70,18 +70,19 @@ const RULES = `
   color: var(--dsw-alias-label-tertiary, #8c8c8c);
   margin-right: 3px;
 }
+/* 数值只比标签亮一档，不用彩色：一行灰字里数字自然浮出 */
 .rvr-value {
   color: var(--dsw-alias-label-secondary, #5c5c5c);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
 }
-/* 速度类数值用主题蓝点出，字重保持中等避免整条蓝 */
+/* 速度与用量同色系，靠字重而不是颜色区分 */
 .rvr-speed {
-  color: var(--dsw-alias-state-business-primary, #4d6bfe);
+  color: var(--dsw-alias-label-primary, #1f1f1f);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
 }
-/* 异常状态（重试 / 中止 / 出错）用警示色，正常轮次不出现 */
+/* 异常状态（重试 / 中止 / 出错）保留警示色，正常轮次整行无彩色 */
 .rvr-warn {
   color: var(--dsw-alias-state-warn-primary, #f59e0b);
   font-weight: 500;
