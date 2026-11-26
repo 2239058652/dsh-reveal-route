@@ -83,6 +83,9 @@ interface EventsRegistry {
 /** 只为导出给调用方做类型标注。 */
 export type { EventsRegistry }
 
+/** 匹配阶段只判断事件形状，不需要真实时间表。 */
+const EMPTY_STARTS: ReadonlyMap<string, number> = new Map()
+
 /**
  * 消费一个事件，推进内部状态。
  *
@@ -104,12 +107,15 @@ function advance(state: TurnState | undefined, event: unknown): TurnState | null
     }
   }
 
-  const observation = readRoute(event)
-  if (observation === undefined) return null
-
+  // 指标与路由解耦：**每次模型请求都要记样本**，不管上游有没有改写路由。
+  // 早先这里在 readRoute 返回 undefined 时直接 bail，导致「模型没变」的轮次
+  // 一个样本都记不到，性能指标永远为空。
   const stepStarts = state?.stepStarts ?? new Map<string, number>()
   const sample = readStepSample(event, stepStarts)
-  const route = accumulateRoute(state?.route, observation)
+  if (sample === null) return null
+
+  const observation = readRoute(event)
+  const route = observation === undefined ? (state?.route ?? { turn: sample.turn, phases: [] }) : accumulateRoute(state?.route, observation)
 
   return {
     route,
@@ -135,10 +141,12 @@ const definition: NodeDefinition = {
       const turn = start.key.slice(0, start.key.indexOf(':'))
       return { id: turn, role: 'start' }
     },
+    // 关键：**不能**因为路由没变就不匹配。每次模型请求都要进 Context 记样本，
+    // 否则「模型没变」的轮次算不出任何性能指标。
     'assistant/message': (event) => {
-      const observation = readRoute(event)
-      if (observation === undefined) return null
-      return { id: String(observation.turn), role: 'start' }
+      const sample = readStepSample(event, EMPTY_STARTS)
+      if (sample === null) return null
+      return { id: String(sample.turn), role: 'start' }
     },
   },
 

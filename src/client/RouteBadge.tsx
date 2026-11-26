@@ -145,13 +145,16 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
   // 全程同一个模型时不必画箭头链条，`×N` 已经说清次数。
   const single = phases.length === 1
 
+  const tip = tooltip(phases)
+
   return (
     <div className={CSS.root}>
       <span
         ref={contentRef}
         // 折叠态一行截断，展开态在同一个容器里换行
         className={expanded ? `${CSS.pill} ${CSS.pillExpanded}` : CSS.pill}
-        title={tooltip(phases)}
+        // 没有路由阶段时不必挂一个空的悬浮提示
+        title={tip === '' ? undefined : tip}
         // 点击整块也能切换，省得只认那个小按钮
         onClick={() => {
           if (overflowing || expanded) setExpanded((value) => !value)
