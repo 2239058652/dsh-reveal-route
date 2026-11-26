@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Reveal route",
-    "description": "Shows the model the upstream actually served under each turn, appearing only when the upstream rewrote the route."
+    "description": "Shows the model the upstream actually served for each turn, plus that turn's TTFT, decode speed, end-to-end speed, and total time. On sessions spanning days, only per-turn numbers reveal whether this turn was fast."
   }
 }

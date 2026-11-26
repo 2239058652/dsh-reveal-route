@@ -1,7 +1,7 @@
 {
   "name": "dsh-reveal-route",
   "displayName": "DSH Reveal Route",
-  "description": "在每轮 Turn 的动作行前显示上游实际服务的模型 —— 读 assistant/message 事件 source.replayState.response.responseModel，只在上游改写了路由（如 auto）时出现",
+  "description": "每轮对话显示上游实际服务的模型与该轮的 TTFT、解码速度、端到端速度、总耗时 —— 数据全部来自已有会话事件，不额外采集",
   "version": "0.1.0",
   "packageManager": "pnpm@11.18.0",
   "author": "2239058652",
