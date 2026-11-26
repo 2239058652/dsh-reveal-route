@@ -13,14 +13,13 @@ const STYLE_ID = 'dsh-reveal-route-styles'
 export const CSS = {
   root: 'rvr-root',
   body: 'rvr-body',
-  bodyExpanded: 'rvr-body-expanded',
   line: 'rvr-line',
+  chain: 'rvr-line-chain',
   arrow: 'rvr-arrow',
   served: 'rvr-served',
   count: 'rvr-count',
   part: 'rvr-part',
   sep: 'rvr-sep',
-  toggle: 'rvr-toggle',
 } as const
 
 const RULES = `
@@ -37,15 +36,17 @@ const RULES = `
   font-size: 11px; line-height: 1.6;
   color: var(--dsw-alias-label-secondary, #5c5c5c);
 }
-/* 单行：默认强制一行截断 */
+/*
+ * 行：默认允许自然折行。
+ * 模型链那一行要保持一条链不断开（nowrap），指标行则应随宽度自动换行。
+ */
 .rvr-line {
   min-width: 0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: normal; overflow-wrap: anywhere;
 }
-/* 展开态：每行允许换行，继续往后排 */
-.rvr-body-expanded .rvr-line {
-  white-space: normal; overflow: visible; text-overflow: clip;
-  overflow-wrap: anywhere;
+/* 模型链专用：不允许折行，放不下就省略 */
+.rvr-line-chain {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .rvr-arrow { color: var(--dsw-alias-label-tertiary, #8c8c8c); }
 .rvr-served {
@@ -60,17 +61,11 @@ const RULES = `
 .rvr-part {
   font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-tertiary, #8c8c8c);
+  /* 片段之间不拆开：「生成 161 tok/s」整体作为一个不可分割单元 */
+  display: inline-block;
+  white-space: nowrap;
 }
 .rvr-sep { margin: 0 4px; opacity: 0.6; }
-.rvr-toggle {
-  flex: none; cursor: pointer; align-self: flex-start;
-  padding: 1px 6px; border-radius: 5px;
-  border: 1px solid var(--dsw-alias-border-l2, #e5e5e5);
-  background: transparent;
-  color: var(--dsw-alias-label-secondary, #5c5c5c);
-  font-size: 11px; line-height: 1.6; font-family: inherit;
-}
-.rvr-toggle:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.14)); }
 `
 
 let injected = false

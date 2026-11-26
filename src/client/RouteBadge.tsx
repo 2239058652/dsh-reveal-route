@@ -28,7 +28,7 @@
  */
 
 import type * as React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import { CSS, ensureStyles } from './styles.ts'
 import { ROUTE_KIND, type RoutePhase } from './route.ts'
 import type { TurnMetrics } from './metrics.ts'
@@ -177,44 +177,16 @@ function joinPart(className: string): (part: string, index: number) => React.JSX
 }
 
 export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null {
-  const [expanded, setExpanded] = useState(false)
-  const [overflowing, setOverflowing] = useState(false)
-  const contentRef = useRef<HTMLDivElement | null>(null)
   const reveal = readReveal(turn as TurnLike | undefined)
   const phases = readPhases(turn as TurnLike | undefined)
-  const speeds = speedParts(reveal?.metrics)
-  const usage = usageParts(reveal?.metrics)
+  // 速度与用量合成一条：放得下就一行，放不下靠 CSS 自然换行
+  const details = [...speedParts(reveal?.metrics), ...usageParts(reveal?.metrics)]
 
   useEffect(() => {
     ensureStyles()
   }, [])
 
-  /**
-   * 判断折叠态是否真的被截断了。
-   *
-   * 只在确实溢出时显示「展开」按钮 —— 否则每一轮都挂个没用的按钮很吵。
-   * 折叠态（nowrap）下 `scrollWidth > clientWidth` 就是溢出。
-   *
-   * 依赖里带上两行的内容：一轮里样本是逐个到达的，内容会变长，
-   * 需要重新测量；只在挂载时测一次会导致长轮次漏掉按钮。
-   */
-  useEffect(() => {
-    const element = contentRef.current
-    if (element === null || expanded) return
-    const measure = (): void => {
-      setOverflowing(element.scrollWidth > element.clientWidth + 1)
-    }
-    measure()
-    // 窗口变宽/变窄都会改变能否装下
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(measure)
-    observer.observe(element)
-    return () => {
-      observer.disconnect()
-    }
-  }, [expanded, phases.length, speeds.length, usage.length])
-
-  if (phases.length === 0 && speeds.length === 0 && usage.length === 0) return null
+  if (phases.length === 0 && details.length === 0) return null
 
   // 请求模型全程一致时只写一次，避免每段重复；不一致就各段自带。
   const requested = new Set(phases.map((phase) => phase.requested))
@@ -226,13 +198,10 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
 
   return (
     <div className={CSS.root}>
-      <div
-        ref={contentRef}
-        className={expanded ? `${CSS.body} ${CSS.bodyExpanded}` : CSS.body}
-      >
+      <div className={CSS.body}>
         {/* 第一行：模型路由 */}
         {phases.length === 0 ? null : (
-          <div className={CSS.line} title={tip === '' ? undefined : tip}>
+          <div className={`${CSS.line} ${CSS.chain}`} title={tip === '' ? undefined : tip}>
             <span className={CSS.served}>
               {shared === undefined ? null : (
                 <>
@@ -253,23 +222,9 @@ export function RouteBadge({ turn }: RouteBadgeProps): React.JSX.Element | null 
           </div>
         )}
 
-        {/* 第二行：性能指标 */}
-        {speeds.length === 0 ? null : <div className={CSS.line}>{speeds.map(joinPart(CSS.part))}</div>}
-
-        {/* 第三行：用量与异常 */}
-        {usage.length === 0 ? null : <div className={CSS.line}>{usage.map(joinPart(CSS.part))}</div>}
+        {/* 第二行：速度与用量，放不下时自然换行 */}
+        {details.length === 0 ? null : <div className={CSS.line}>{details.map(joinPart(CSS.part))}</div>}
       </div>
-      {overflowing || expanded ? (
-        <button
-          type="button"
-          className={CSS.toggle}
-          title={expanded ? '收起' : '展开显示全部'}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {expanded ? '收起' : '展开'}
-        </button>
-      ) : null}
     </div>
   )
 }
